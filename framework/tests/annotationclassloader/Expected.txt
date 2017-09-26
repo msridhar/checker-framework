@@ -1,4 +1,0 @@
-LoaderTest.java:7: error: (unique.leaked)
-        Object[] ar = new Object[] {o};
-                                    ^
-1 error
