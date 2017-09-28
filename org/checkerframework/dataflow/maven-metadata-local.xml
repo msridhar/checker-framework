@@ -3,10 +3,11 @@
   <groupId>org.checkerframework</groupId>
   <artifactId>dataflow</artifactId>
   <versioning>
-    <release>2.1.14-nullaway</release>
+    <release>2.1.14.1-nullaway</release>
     <versions>
       <version>2.1.14-nullaway</version>
+      <version>2.1.14.1-nullaway</version>
     </versions>
-    <lastUpdated>20170926000505</lastUpdated>
+    <lastUpdated>20170928233858</lastUpdated>
   </versioning>
 </metadata>
