@@ -3,10 +3,11 @@
   <groupId>org.checkerframework</groupId>
   <artifactId>javacutil</artifactId>
   <versioning>
-    <release>2.3.1.1-nullaway</release>
+    <release>2.3.2.1-nullaway</release>
     <versions>
       <version>2.3.1.1-nullaway</version>
+      <version>2.3.2.1-nullaway</version>
     </versions>
-    <lastUpdated>20180105215517</lastUpdated>
+    <lastUpdated>20180213215535</lastUpdated>
   </versioning>
 </metadata>
