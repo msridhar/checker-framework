@@ -72,8 +72,12 @@ import org.checkerframework.javacutil.TreeUtils;
 import org.checkerframework.javacutil.TypesUtils;
 
 /**
- * Checks that all methods in {@link org.checkerframework.checker.mustcall.qual.MustCall} object
- * types are invoked before the corresponding objects become unreachable
+ * An analyzer that checks consistency of {@code @MustCall} and {@code @CalledMethods} types within
+ * a method, thereby detecting resource leaks. For any expression <emph>e</emph> in the method, the
+ * analyzer ensures that at method exit, there exists a resource alias <emph>r</emph> of
+ * <emph>e</emph> such that @MustCall(r) is contained in @CalledMethods(r). For any <emph>e</emph>
+ * for which this property does not hold, the analyzer reports a {@code
+ * "required.method.not.called"} error, indicating a possible resource leak.
  */
 /* package-private */
 class MustCallConsistencyAnalyzer {
@@ -101,46 +105,44 @@ class MustCallConsistencyAnalyzer {
   }
 
   /**
-   * This function traverses the given method CFG and reports an error if "f" isn't called on any
-   * local variable node whose class type has @MustCall(f) annotation before the variable goes out
-   * of scope. The traverse is a standard worklist algorithm. Worklist and visited entries are
-   * BlockWithLocals objects that contain a set of (LocalVariableNode, Tree) pairs for each block. A
-   * pair (n, T) represents a local variable node "n" and the latest AssignmentTree "T" that assigns
-   * a value to "n".
+   * The main function of the consistency dataflow analysis. The analysis tracks dataflow facts of
+   * type {@code ImmutableSet<LocalVarWithTree>}, each representing a set of resource aliases for
+   * some value with a non-empty {@code @MustCall} obligation. The analysis is currently implemented
+   * directly using a worklist; in the future, it should be transitioned to use the Checker dataflow
+   * framework.
    *
-   * @param cfg the control flow graph of a method
+   * @param cfg the control flow graph of the method to check
    */
   /* package-private */
   void analyze(ControlFlowGraph cfg) {
+    Set<BlockWithFacts> visited = new LinkedHashSet<>();
+    Deque<BlockWithFacts> worklist = new ArrayDeque<>();
+
     // add any owning parameters to initial set of variables to track
-    BlockWithLocals firstBlockLocals =
-        new BlockWithLocals(cfg.getEntryBlock(), computeOwningParameters(cfg));
-
-    Set<BlockWithLocals> visited = new LinkedHashSet<>();
-    Deque<BlockWithLocals> worklist = new ArrayDeque<>();
-
-    worklist.add(firstBlockLocals);
-    visited.add(firstBlockLocals);
+    BlockWithFacts entryBlockFacts =
+        new BlockWithFacts(cfg.getEntryBlock(), computeOwningParameters(cfg));
+    worklist.add(entryBlockFacts);
+    visited.add(entryBlockFacts);
 
     while (!worklist.isEmpty()) {
-
-      BlockWithLocals curBlockLocals = worklist.removeLast();
-      List<Node> nodes = curBlockLocals.block.getNodes();
-      // defs to be tracked in successor blocks, updated by code below
-      Set<ImmutableSet<LocalVarWithTree>> newDefs =
-          new LinkedHashSet<>(curBlockLocals.localSetInfo);
+      BlockWithFacts curBlockFacts = worklist.removeLast();
+      List<Node> nodes = curBlockFacts.block.getNodes();
+      // A *mutable* set that eventually holds the set of facts to be propagated to successor
+      // blocks. The set is initialized to the current facts and updated by the methods invoked in
+      // the for loop below.
+      Set<ImmutableSet<LocalVarWithTree>> newFacts = new LinkedHashSet<>(curBlockFacts.facts);
 
       for (Node node : nodes) {
         if (node instanceof AssignmentNode) {
-          handleAssignment((AssignmentNode) node, newDefs);
+          handleAssignment((AssignmentNode) node, newFacts);
         } else if (node instanceof ReturnNode) {
-          handleReturn((ReturnNode) node, cfg, newDefs);
+          handleReturn((ReturnNode) node, cfg, newFacts);
         } else if (node instanceof MethodInvocationNode || node instanceof ObjectCreationNode) {
-          handleInvocation(newDefs, node);
+          handleInvocation(newFacts, node);
         }
       }
 
-      handleSuccessorBlocks(visited, worklist, newDefs, curBlockLocals.block);
+      handleSuccessorBlocks(visited, worklist, newFacts, curBlockFacts.block);
     }
   }
 
@@ -179,9 +181,7 @@ class MustCallConsistencyAnalyzer {
     // its obligation has been fulfilled by being passed on to the MCA constructor (because we must
     // be in a constructor body if we've encountered a this/super constructor call).
     if (mcaParam instanceof LocalVariableNode && isVarInDefs(defs, (LocalVariableNode) mcaParam)) {
-      ImmutableSet<LocalVarWithTree> setContainingMustCallAliasParamLocal =
-          getSetContainingAssignmentTreeOfVar(defs, (LocalVariableNode) mcaParam);
-      defs.remove(setContainingMustCallAliasParamLocal);
+      removeFactContainingVar(defs, (LocalVariableNode) mcaParam);
     }
   }
 
@@ -532,23 +532,18 @@ class MustCallConsistencyAnalyzer {
     return false;
   }
 
-  private void handleAssignment(AssignmentNode node, Set<ImmutableSet<LocalVarWithTree>> newDefs) {
+  /**
+   * Updates a set of facts to account for an assignment
+   *
+   * @param node the assignment
+   * @param newFacts the set of facts to update
+   */
+  private void handleAssignment(AssignmentNode node, Set<ImmutableSet<LocalVarWithTree>> newFacts) {
+    // use the temporary variable for the rhs if it exists
     Node rhs = removeCasts(node.getExpression());
     if (typeFactory.getTempVarForTree(rhs) != null) {
       rhs = typeFactory.getTempVarForTree(rhs);
     }
-    handleAssignFromRHS(node, newDefs, rhs);
-  }
-
-  private Node removeCasts(Node node) {
-    while (node instanceof TypeCastNode) {
-      node = ((TypeCastNode) node).getOperand();
-    }
-    return node;
-  }
-
-  private void handleAssignFromRHS(
-      AssignmentNode node, Set<ImmutableSet<LocalVarWithTree>> newDefs, Node rhs) {
     Node lhs = node.getTarget();
     Element lhsElement = TreeUtils.elementFromTree(lhs.getTree());
 
@@ -561,17 +556,14 @@ class MustCallConsistencyAnalyzer {
       if (isOwningField
           && typeFactory.canCreateObligations()
           && !ElementUtils.isFinal(lhsElement)) {
-        checkReassignmentToField(node, newDefs);
+        checkReassignmentToField(node, newFacts);
       }
       // Remove obligations from local variables, now that the owning field is responsible.
       // (When obligation creation is turned off, non-final fields cannot take ownership).
       if (isOwningField
           && rhs instanceof LocalVariableNode
-          && isVarInDefs(newDefs, (LocalVariableNode) rhs)
           && (typeFactory.canCreateObligations() || ElementUtils.isFinal(lhsElement))) {
-        Set<LocalVarWithTree> setContainingRhs =
-            getSetContainingAssignmentTreeOfVar(newDefs, (LocalVariableNode) rhs);
-        newDefs.remove(setContainingRhs);
+        removeFactContainingVar(newFacts, (LocalVariableNode) rhs);
       }
     } else if (lhs instanceof LocalVariableNode) {
       LocalVariableNode lhsVar = (LocalVariableNode) lhs;
@@ -580,14 +572,36 @@ class MustCallConsistencyAnalyzer {
         // assigned to the variable will be closed.  So, if the RHS is a tracked variable, remove
         // its set from the defs
         if (rhs instanceof LocalVariableNode) {
-          Set<LocalVarWithTree> setContainingRhs =
-              getSetContainingAssignmentTreeOfVar(newDefs, (LocalVariableNode) rhs);
-          newDefs.remove(setContainingRhs);
+          removeFactContainingVar(newFacts, (LocalVariableNode) rhs);
         }
       } else {
-        doGenKillForPseudoAssignment(node, newDefs, lhsVar, rhs);
+        doGenKillForPseudoAssignment(node, newFacts, lhsVar, rhs);
       }
     }
+  }
+
+  /**
+   * Remove any facts from a fact set that contain a {@link LocalVarWithTree} with a particular
+   * variable
+   *
+   * @param facts the set of facts
+   * @param var the variable
+   */
+  private void removeFactContainingVar(
+      Set<ImmutableSet<LocalVarWithTree>> facts, LocalVariableNode var) {
+    Set<LocalVarWithTree> setContainingRhs = getSetContainingAssignmentTreeOfVar(facts, var);
+    facts.remove(setContainingRhs);
+  }
+
+  /**
+   * remove any {@link TypeCastNode}s wrapping a node, returning the operand nested within the type
+   * casts
+   */
+  private Node removeCasts(Node node) {
+    while (node instanceof TypeCastNode) {
+      node = ((TypeCastNode) node).getOperand();
+    }
+    return node;
   }
 
   /**
@@ -598,63 +612,63 @@ class MustCallConsistencyAnalyzer {
    * ternary expression.
    *
    * @param node the node performing the assignment.
-   * @param defs the tracked definitions
+   * @param facts the tracked facts
    * @param lhsVar the left-hand side variable for the pseudo-assignment
    * @param rhs the right-hand side for the pseudo-assignment
    */
   private void doGenKillForPseudoAssignment(
-      Node node, Set<ImmutableSet<LocalVarWithTree>> defs, LocalVariableNode lhsVar, Node rhs) {
-    // Replacements to eventually perform in defs.  We keep this map to avoid a
+      Node node, Set<ImmutableSet<LocalVarWithTree>> facts, LocalVariableNode lhsVar, Node rhs) {
+    // Replacements to eventually perform in the facts.  We keep this map to avoid a
     // ConcurrentModificationException in the loop below
     Map<ImmutableSet<LocalVarWithTree>, ImmutableSet<LocalVarWithTree>> replacements =
         new LinkedHashMap<>();
-    // construct this once outside the loop for efficiency
+    // construct lhsVarWithTreeToGen once outside the loop for efficiency
     LocalVarWithTree lhsVarWithTreeToGen =
         new LocalVarWithTree(new LocalVariable(lhsVar), node.getTree());
-    for (ImmutableSet<LocalVarWithTree> varWithTreeSet : defs) {
+    for (ImmutableSet<LocalVarWithTree> fact : facts) {
       Set<LocalVarWithTree> kill = new LinkedHashSet<>();
       // always kill the lhs var if present
-      addLocalVarWithTreeToSetIfPresent(varWithTreeSet, lhsVar.getElement(), kill);
+      addLocalVarWithTreeToSetIfPresent(fact, lhsVar.getElement(), kill);
       LocalVarWithTree gen = null;
-      // if rhs is a variable tracked in the set, gen the lhs
+      // if rhs is a variable tracked in the fact, gen the lhs
       if (rhs instanceof LocalVariableNode) {
         LocalVariableNode rhsVar = (LocalVariableNode) rhs;
-        if (varWithTreeSet.stream()
+        if (fact.stream()
             .anyMatch(lvwt -> lvwt.localVar.getElement().equals(rhsVar.getElement()))) {
           gen = lhsVarWithTreeToGen;
-          // we remove temp vars from tracking once they are assigned elsewhere
+          // we remove temp vars from tracking once they are assigned to another location
           if (typeFactory.isTempVar(rhsVar)) {
-            addLocalVarWithTreeToSetIfPresent(varWithTreeSet, rhsVar.getElement(), kill);
+            addLocalVarWithTreeToSetIfPresent(fact, rhsVar.getElement(), kill);
           }
         }
       }
-      // check if there is something to do before creating a new set, for efficiency
+      // check if there is something to do before creating a new fact, for efficiency
       if (kill.isEmpty() && gen == null) {
         continue;
       }
-      Set<LocalVarWithTree> newVarWithTreeSet = new LinkedHashSet<>(varWithTreeSet);
-      newVarWithTreeSet.removeAll(kill);
+      Set<LocalVarWithTree> newFact = new LinkedHashSet<>(fact);
+      newFact.removeAll(kill);
       if (gen != null) {
-        newVarWithTreeSet.add(gen);
+        newFact.add(gen);
       }
-      if (newVarWithTreeSet.size() == 0) {
+      if (newFact.size() == 0) {
         // we have killed the last reference to the resource; check the must-call obligation
         MustCallAnnotatedTypeFactory mcAtf =
             typeFactory.getTypeFactoryOfSubchecker(MustCallChecker.class);
         checkMustCall(
-            varWithTreeSet,
+            fact,
             typeFactory.getStoreBefore(node),
             mcAtf.getStoreBefore(node),
             "variable overwritten by assignment " + node.getTree());
       }
-      replacements.put(varWithTreeSet, ImmutableSet.copyOf(newVarWithTreeSet));
+      replacements.put(fact, ImmutableSet.copyOf(newFact));
     }
-    // finally, update defs according to the replacements
+    // finally, update facts according to the replacements
     for (Map.Entry<ImmutableSet<LocalVarWithTree>, ImmutableSet<LocalVarWithTree>> entry :
         replacements.entrySet()) {
-      defs.remove(entry.getKey());
+      facts.remove(entry.getKey());
       if (!entry.getValue().isEmpty()) {
-        defs.add(entry.getValue());
+        facts.add(entry.getValue());
       }
     }
   }
@@ -962,8 +976,8 @@ class MustCallConsistencyAnalyzer {
   }
 
   private void handleSuccessorBlocks(
-      Set<BlockWithLocals> visited,
-      Deque<BlockWithLocals> worklist,
+      Set<BlockWithFacts> visited,
+      Deque<BlockWithFacts> worklist,
       Set<ImmutableSet<LocalVarWithTree>> defs,
       Block block) {
     List<Node> nodes = block.getNodes();
@@ -1052,7 +1066,7 @@ class MustCallConsistencyAnalyzer {
       }
 
       defsCopy.removeAll(toRemove);
-      propagate(new BlockWithLocals(succ, defsCopy), visited, worklist);
+      propagate(new BlockWithFacts(succ, defsCopy), visited, worklist);
     }
   }
 
@@ -1342,7 +1356,7 @@ class MustCallConsistencyAnalyzer {
    * yet.
    */
   private static void propagate(
-      BlockWithLocals state, Set<BlockWithLocals> visited, Deque<BlockWithLocals> worklist) {
+      BlockWithFacts state, Set<BlockWithFacts> visited, Deque<BlockWithFacts> worklist) {
 
     if (visited.add(state)) {
       worklist.add(state);
@@ -1365,30 +1379,35 @@ class MustCallConsistencyAnalyzer {
   }
 
   /**
-   * A pair of a {@link Block} and a set of {@link LocalVarWithTree}. In our algorithm, a
-   * BlockWithLocals represents visiting a {@link Block} while checking the {@link
-   * org.checkerframework.checker.mustcall.qual.MustCall} obligations for a set of locals.
+   * A pair of a {@link Block} and a set of dataflow facts for our analysis. Each fact is an {@code
+   * ImmutableSet<LocalVarWithTree>}, representing a set of resource aliases for some tracked
+   * resource. The analyzer's worklist consists of BlockWithFacts objects, each representing the
+   * need to handle the set of facts reaching the block during analysis.
    */
-  private static class BlockWithLocals {
+  private static class BlockWithFacts {
     public final Block block;
-    public final ImmutableSet<ImmutableSet<LocalVarWithTree>> localSetInfo;
+    public final ImmutableSet<ImmutableSet<LocalVarWithTree>> facts;
 
-    public BlockWithLocals(Block b, Set<ImmutableSet<LocalVarWithTree>> ls) {
+    public BlockWithFacts(Block b, Set<ImmutableSet<LocalVarWithTree>> facts) {
       this.block = b;
-      this.localSetInfo = ImmutableSet.copyOf(ls);
+      this.facts = ImmutableSet.copyOf(facts);
     }
 
     @Override
     public boolean equals(Object o) {
-      if (this == o) return true;
-      if (o == null || getClass() != o.getClass()) return false;
-      BlockWithLocals that = (BlockWithLocals) o;
-      return block.equals(that.block) && localSetInfo.equals(that.localSetInfo);
+      if (this == o) {
+        return true;
+      }
+      if (o == null || getClass() != o.getClass()) {
+        return false;
+      }
+      BlockWithFacts that = (BlockWithFacts) o;
+      return block.equals(that.block) && facts.equals(that.facts);
     }
 
     @Override
     public int hashCode() {
-      return Objects.hash(block, localSetInfo);
+      return Objects.hash(block, facts);
     }
   }
 
@@ -1414,8 +1433,12 @@ class MustCallConsistencyAnalyzer {
 
     @Override
     public boolean equals(Object o) {
-      if (this == o) return true;
-      if (o == null || getClass() != o.getClass()) return false;
+      if (this == o) {
+        return true;
+      }
+      if (o == null || getClass() != o.getClass()) {
+        return false;
+      }
       LocalVarWithTree that = (LocalVarWithTree) o;
       return localVar.equals(that.localVar) && tree.equals(that.tree);
     }
