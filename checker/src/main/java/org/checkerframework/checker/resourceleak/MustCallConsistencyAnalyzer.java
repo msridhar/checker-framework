@@ -494,16 +494,20 @@ class MustCallConsistencyAnalyzer {
     }
   }
 
+  /**
+   * If the return type of the enclosing method is {@code @Owning}, transfer ownership of the return
+   * value and stop tracking it in the facts
+   */
   private void handleReturn(
-      ReturnNode node, ControlFlowGraph cfg, Set<ImmutableSet<LocalVarWithTree>> newDefs) {
+      ReturnNode node, ControlFlowGraph cfg, Set<ImmutableSet<LocalVarWithTree>> newFacts) {
     if (isTransferOwnershipAtReturn(cfg)) {
       Node result = node.getResult();
       Node temp = typeFactory.getTempVarForTree(result);
       if (temp != null) {
         result = temp;
       }
-      if (result instanceof LocalVariableNode && isVarInDefs(newDefs, (LocalVariableNode) result)) {
-        newDefs.remove(getSetContainingAssignmentTreeOfVar(newDefs, (LocalVariableNode) result));
+      if (result instanceof LocalVariableNode) {
+        removeFactContainingVar(newFacts, (LocalVariableNode) result);
       }
     }
   }
