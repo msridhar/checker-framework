@@ -991,8 +991,8 @@ class MustCallConsistencyAnalyzer {
           handleTernaySuccIfNeeded(curBlock, succ, facts);
       // factsForSucc eventually contains the facts to propagate to succ.  It may be mutated in the
       // loop below.
-      Set<ImmutableSet<LocalVarWithTree>> factsForSucc = new LinkedHashSet<>(curFacts);
-      Set<ImmutableSet<LocalVarWithTree>> toRemove = new LinkedHashSet<>();
+      Set<ImmutableSet<LocalVarWithTree>> factsForSucc = new LinkedHashSet<>();
+      // Set<ImmutableSet<LocalVarWithTree>> toRemove = new LinkedHashSet<>();
       // a detailed reason to give in the case that a relevant variable goes out of scope with an
       // unsatisfied obligation along the current control-flow edge
       String reasonForSucc =
@@ -1025,16 +1025,18 @@ class MustCallConsistencyAnalyzer {
                     .localVar
                     .getElement()
                     .equals(tmpVarForExcNode.getElement())) {
-              toRemove.add(fact);
               break;
             }
           }
 
-          if (curBlockNodes.size() == 1 && nestedInCastOrTernary(curBlock.getNodes().get(0))) {
+          // always propagate fact to successor if current block represents code nested in a cast or
+          // ternary expression.  TODO why???
+          if (curBlockNodes.size() == 1 && nestedInCastOrTernary(curBlockNodes.get(0))) {
+            factsForSucc.add(fact);
             break;
           }
 
-          if (curBlockNodes.size() == 0) { // If the cur block is special or conditional block
+          if (curBlockNodes.size() == 0 /* curBlock is special or conditional */) {
             // Use the store from the block actually being analyzed, rather than succRegularStore,
             // if succRegularStore contains no information about the variables of interest.
             // In the case where none of the local variables in fact appear in
@@ -1049,8 +1051,8 @@ class MustCallConsistencyAnalyzer {
                     : succRegularStore;
             CFStore mcStore = mcAtf.getStoreForBlock(noInfoInSuccStoreForVars, curBlock, succ);
             checkMustCall(fact, cmStore, mcStore, reasonForSucc);
-          } else { // If the cur block is Exception/Regular block then it checks MustCall
-            // annotation in the store right after the last node
+          } else { // current block has at least one node
+            // use the called-methods store immediately after the last node in curBlock
             Node last = curBlockNodes.get(curBlockNodes.size() - 1);
             CFStore cmStoreAfter = typeFactory.getStoreAfter(last);
             // If this is an exceptional block, check the MC store beforehand to avoid
@@ -1065,18 +1067,15 @@ class MustCallConsistencyAnalyzer {
             checkMustCall(fact, cmStoreAfter, mcStore, reasonForSucc);
           }
 
-          toRemove.add(fact);
-        } else {
-          // handling the case where some vars go out of scope in the set
-          Set<LocalVarWithTree> setAssignCopy = new LinkedHashSet<>(fact);
-          setAssignCopy.removeIf(
+        } else { // info in successor store about some var in fact
+          // handling the possibility that some vars in the fact go out of scope
+          Set<LocalVarWithTree> factCopy = new LinkedHashSet<>(fact);
+          factCopy.removeIf(
               assign -> varNotPresentInStoreAndNotForTernary(succRegularStore, assign));
-          factsForSucc.remove(fact);
-          factsForSucc.add(ImmutableSet.copyOf(setAssignCopy));
+          factsForSucc.add(ImmutableSet.copyOf(factCopy));
         }
       }
 
-      factsForSucc.removeAll(toRemove);
       propagate(new BlockWithFacts(succ, factsForSucc), visited, worklist);
     }
   }
