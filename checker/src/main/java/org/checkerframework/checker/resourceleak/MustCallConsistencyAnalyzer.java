@@ -3,6 +3,7 @@ package org.checkerframework.checker.resourceleak;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.sun.source.tree.ConditionalExpressionTree;
 import com.sun.source.tree.MethodInvocationTree;
 import com.sun.source.tree.MethodTree;
@@ -933,7 +934,8 @@ class MustCallConsistencyAnalyzer {
   }
 
   /**
-   * get all successor blocks for some block, except for those corresponding to ignored exceptions
+   * get all successor blocks for some block, except for those corresponding to ignored exception
+   * types
    *
    * @param block input block
    * @return set of pairs (b, t), where b is a relevant successor block, and t is the type of
@@ -967,18 +969,32 @@ class MustCallConsistencyAnalyzer {
     }
   }
 
+  /**
+   * Propagates a set of facts to relevant successors, and performs consistency checks when
+   * variables are going out of scope
+   *
+   * @param visited block-facts pairs already handled
+   * @param worklist current worklist
+   * @param facts facts to propagate to successors
+   * @param curBlock the current block
+   */
   private void handleSuccessorBlocks(
       Set<BlockWithFacts> visited,
       Deque<BlockWithFacts> worklist,
-      Set<ImmutableSet<LocalVarWithTree>> defs,
-      Block block) {
-    List<Node> nodes = block.getNodes();
-    for (Pair<Block, @Nullable TypeMirror> succAndExcType : getRelevantSuccessors(block)) {
+      Set<ImmutableSet<LocalVarWithTree>> facts,
+      Block curBlock) {
+    List<Node> curBlockNodes = curBlock.getNodes();
+    for (Pair<Block, @Nullable TypeMirror> succAndExcType : getRelevantSuccessors(curBlock)) {
       Block succ = succAndExcType.first;
       TypeMirror exceptionType = succAndExcType.second;
-      Set<ImmutableSet<LocalVarWithTree>> defsToUse = handleTernarySucc(block, succ, defs);
-      Set<ImmutableSet<LocalVarWithTree>> defsCopy = new LinkedHashSet<>(defsToUse);
+      Set<ImmutableSet<LocalVarWithTree>> curFacts =
+          handleTernaySuccIfNeeded(curBlock, succ, facts);
+      // factsForSucc eventually contains the facts to propagate to succ.  It may be mutated in the
+      // loop below.
+      Set<ImmutableSet<LocalVarWithTree>> factsForSucc = new LinkedHashSet<>(curFacts);
       Set<ImmutableSet<LocalVarWithTree>> toRemove = new LinkedHashSet<>();
+      // a detailed reason to give in the case that a relevant variable goes out of scope with an
+      // unsatisfied obligation along the current control-flow edge
       String reasonForSucc =
           exceptionType == null
               ?
@@ -986,53 +1002,56 @@ class MustCallConsistencyAnalyzer {
               // doesn't seem to provide additional helpful information
               "regular method exit"
               : "possible exceptional exit due to "
-                  + ((ExceptionBlock) block).getNode().getTree()
+                  + ((ExceptionBlock) curBlock).getNode().getTree()
                   + " with exception type "
-                  + exceptionType.toString();
+                  + exceptionType;
       CFStore succRegularStore = analysis.getInput(succ).getRegularStore();
-      for (ImmutableSet<LocalVarWithTree> setAssign : defsToUse) {
-        // If the successor block is the exit block or if the variable is going out of scope
-        boolean noSuccInfo =
-            setAssign.stream()
+      for (ImmutableSet<LocalVarWithTree> fact : curFacts) {
+        boolean noInfoInSuccStoreForVars =
+            fact.stream()
                 .allMatch(assign -> varNotPresentInStoreAndNotForTernary(succRegularStore, assign));
-        if (succ instanceof SpecialBlockImpl || noSuccInfo) {
+        if (succ instanceof SpecialBlockImpl /* exit block */ || noInfoInSuccStoreForVars) {
           MustCallAnnotatedTypeFactory mcAtf =
               typeFactory.getTypeFactoryOfSubchecker(MustCallChecker.class);
 
-          // Remove the temporary variable defined for a node that throws an exception from the
-          // exceptional successors
-          if (succAndExcType.second != null) {
-            Node exceptionalNode = removeCasts(((ExceptionBlock) block).getNode());
-            LocalVariableNode localVariable = typeFactory.getTempVarForTree(exceptionalNode);
-            if (localVariable != null
-                && setAssign.stream()
-                    .allMatch(
-                        local -> local.localVar.getElement().equals(localVariable.getElement()))) {
-              toRemove.add(setAssign);
+          // Don't propagate the fact if the curBlock is an ExceptionBlock and the fact represents
+          // the temporary variable for curBlock's node
+          if (exceptionType != null) {
+            Node exceptionalNode = removeCasts(((ExceptionBlock) curBlock).getNode());
+            LocalVariableNode tmpVarForExcNode = typeFactory.getTempVarForTree(exceptionalNode);
+            if (tmpVarForExcNode != null
+                && fact.size() == 1
+                && Iterables.getOnlyElement(fact)
+                    .localVar
+                    .getElement()
+                    .equals(tmpVarForExcNode.getElement())) {
+              toRemove.add(fact);
               break;
             }
           }
 
-          if (nodes.size() == 1 && nestedInCastOrTernary(block.getNodes().get(0))) {
+          if (curBlockNodes.size() == 1 && nestedInCastOrTernary(curBlock.getNodes().get(0))) {
             break;
           }
 
-          if (nodes.size() == 0) { // If the cur block is special or conditional block
+          if (curBlockNodes.size() == 0) { // If the cur block is special or conditional block
             // Use the store from the block actually being analyzed, rather than succRegularStore,
             // if succRegularStore contains no information about the variables of interest.
-            // In the case where none of the local variables in setAssign appear in
+            // In the case where none of the local variables in fact appear in
             // succRegularStore, the variable is going out of scope, and it doesn't make
             // sense to pass succRegularStore to checkMustCall - the successor store will
             // not have any information about it, by construction, and
             // any information in the previous store remains true. If any locals do appear
             // in succRegularStore, we will always use that store.
             CFStore cmStore =
-                noSuccInfo ? analysis.getInput(block).getRegularStore() : succRegularStore;
-            CFStore mcStore = mcAtf.getStoreForBlock(noSuccInfo, block, succ);
-            checkMustCall(setAssign, cmStore, mcStore, reasonForSucc);
+                noInfoInSuccStoreForVars
+                    ? analysis.getInput(curBlock).getRegularStore()
+                    : succRegularStore;
+            CFStore mcStore = mcAtf.getStoreForBlock(noInfoInSuccStoreForVars, curBlock, succ);
+            checkMustCall(fact, cmStore, mcStore, reasonForSucc);
           } else { // If the cur block is Exception/Regular block then it checks MustCall
             // annotation in the store right after the last node
-            Node last = nodes.get(nodes.size() - 1);
+            Node last = curBlockNodes.get(curBlockNodes.size() - 1);
             CFStore cmStoreAfter = typeFactory.getStoreAfter(last);
             // If this is an exceptional block, check the MC store beforehand to avoid
             // issuing an error about a call to a CreatesObligation method that might throw
@@ -1043,22 +1062,22 @@ class MustCallConsistencyAnalyzer {
             } else {
               mcStore = mcAtf.getStoreAfter(last);
             }
-            checkMustCall(setAssign, cmStoreAfter, mcStore, reasonForSucc);
+            checkMustCall(fact, cmStoreAfter, mcStore, reasonForSucc);
           }
 
-          toRemove.add(setAssign);
+          toRemove.add(fact);
         } else {
           // handling the case where some vars go out of scope in the set
-          Set<LocalVarWithTree> setAssignCopy = new LinkedHashSet<>(setAssign);
+          Set<LocalVarWithTree> setAssignCopy = new LinkedHashSet<>(fact);
           setAssignCopy.removeIf(
               assign -> varNotPresentInStoreAndNotForTernary(succRegularStore, assign));
-          defsCopy.remove(setAssign);
-          defsCopy.add(ImmutableSet.copyOf(setAssignCopy));
+          factsForSucc.remove(fact);
+          factsForSucc.add(ImmutableSet.copyOf(setAssignCopy));
         }
       }
 
-      defsCopy.removeAll(toRemove);
-      propagate(new BlockWithFacts(succ, defsCopy), visited, worklist);
+      factsForSucc.removeAll(toRemove);
+      propagate(new BlockWithFacts(succ, factsForSucc), visited, worklist);
     }
   }
 
@@ -1067,7 +1086,7 @@ class MustCallConsistencyAnalyzer {
    * is not a {@link ConditionalExpressionTree}. The check for a {@link ConditionalExpressionTree}
    * is to accommodate our handling of ternary expressions, where we track the temporary variable
    * for the expression at the program point before that expression; see {@link
-   * #handleTernarySucc(Block, Block, Set)}.
+   * #handleTernaySuccIfNeeded(Block, Block, Set)}.
    */
   private boolean varNotPresentInStoreAndNotForTernary(CFStore store, LocalVarWithTree assign) {
     return store.getValue(assign.localVar) == null
@@ -1085,28 +1104,28 @@ class MustCallConsistencyAnalyzer {
    * <p>To handle this representation, we treat the control-flow transition from a node for a
    * ternary expression case <em>c</em> to the successor {@link TernaryExpressionNode} <em>t</em> as
    * a pseudo-assignment from <em>c</em> to the temporary variable for <em>t</em>. With this
-   * handling, the defs reaching the successor node of <em>t</em> will properly account for the
+   * handling, the facts reaching the successor node of <em>t</em> will properly account for the
    * execution of case <em>c</em>.
    *
    * <p>If the successor block does not begin with a {@link TernaryExpressionNode} that needs to be
-   * handled, this method simply returns {@code defs}.
+   * handled, this method simply returns {@code facts}.
    *
    * @param pred the predecessor block, potentially corresponding to the ternary expression case
    * @param succ the successor block, potentially starting with a {@link TernaryExpressionNode}
-   * @param defs the defs before the control-flow transition
-   * @return a new set of defs to account for the {@link TernaryExpressionNode}, or just {@code
-   *     defs} if no handling is required.
+   * @param facts the facts before the control-flow transition
+   * @return a new set of facts to account for the {@link TernaryExpressionNode}, or just {@code
+   *     facts} if no handling is required.
    */
-  private Set<ImmutableSet<LocalVarWithTree>> handleTernarySucc(
-      Block pred, Block succ, Set<ImmutableSet<LocalVarWithTree>> defs) {
+  private Set<ImmutableSet<LocalVarWithTree>> handleTernaySuccIfNeeded(
+      Block pred, Block succ, Set<ImmutableSet<LocalVarWithTree>> facts) {
     List<Node> succNodes = succ.getNodes();
     if (succNodes.isEmpty() || !(succNodes.get(0) instanceof TernaryExpressionNode)) {
-      return defs;
+      return facts;
     }
     TernaryExpressionNode ternaryNode = (TernaryExpressionNode) succNodes.get(0);
     LocalVariableNode ternaryTempVar = typeFactory.getTempVarForTree(ternaryNode);
     if (ternaryTempVar == null) {
-      return defs;
+      return facts;
     }
     List<Node> predNodes = pred.getNodes();
     // right-hand side of the pseudo-assignment to the ternary expression temporary variable
@@ -1114,10 +1133,10 @@ class MustCallConsistencyAnalyzer {
     if (!(rhs instanceof LocalVariableNode)) {
       rhs = typeFactory.getTempVarForTree(rhs);
       if (rhs == null) {
-        return defs;
+        return facts;
       }
     }
-    Set<ImmutableSet<LocalVarWithTree>> newDefs = new LinkedHashSet<>(defs);
+    Set<ImmutableSet<LocalVarWithTree>> newDefs = new LinkedHashSet<>(facts);
     doGenKillForPseudoAssignment(ternaryNode, newDefs, ternaryTempVar, rhs);
     return newDefs;
   }
