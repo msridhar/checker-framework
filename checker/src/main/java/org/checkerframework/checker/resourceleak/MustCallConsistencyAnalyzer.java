@@ -157,15 +157,14 @@ class MustCallConsistencyAnalyzer {
       incrementNumMustCall(node);
     }
 
-    if (shouldSkipInvokeCheck(facts, node)) {
+    if (skipTrackingInvocationResult(facts, node)) {
       return;
     }
 
     if (typeFactory.hasMustCall(node.getTree())) {
-      // TODO do we need both this call and the one earlier in the method?
       incrementNumMustCall(node);
     }
-    trackResultOfInvocation(facts, node);
+    trackInvocationResult(facts, node);
   }
 
   /**
@@ -328,7 +327,7 @@ class MustCallConsistencyAnalyzer {
    * ownership of the result. Searches for the set of same resources in defs and add the new
    * LocalVarWithTree to it if one exists. Otherwise creates a new set.
    */
-  private void trackResultOfInvocation(Set<ImmutableSet<LocalVarWithTree>> facts, Node node) {
+  private void trackInvocationResult(Set<ImmutableSet<LocalVarWithTree>> facts, Node node) {
     Tree tree = node.getTree();
     // we need to track the result of the call iff there is a temporary variable for the node
     LocalVariableNode tmpVar = typeFactory.getTempVarForTree(node);
@@ -337,41 +336,35 @@ class MustCallConsistencyAnalyzer {
     }
     LocalVarWithTree tmpVarWithTree = new LocalVarWithTree(new LocalVariable(tmpVar), tree);
 
-    // Set resourceAlias to the MCA parameter if any exists, otherwise it remains null
-    Node resourceAlias = getMustCallAliasParamVar(node);
+    // Set mustCallAlias to the MCA parameter if any exists, otherwise it remains null
+    Node mustCallAlias = getMustCallAliasParamVar(node);
 
-    // If resourceAlias is still null and node returns @This, set resourceAlias to the receiver
-    if (resourceAlias == null
+    // If mustCallAlias is still null and call returns @This, set mustCallAlias to the receiver
+    if (mustCallAlias == null
         && node instanceof MethodInvocationNode
         && typeFactory.returnsThis((MethodInvocationTree) tree)) {
-      // TODO create a single method to get either a node or the temp var for the node and use it
-      // everywhere
-      resourceAlias = ((MethodInvocationNode) node).getTarget().getReceiver();
-      if (resourceAlias instanceof MethodInvocationNode) {
-        resourceAlias = typeFactory.getTempVarForTree(resourceAlias);
-      }
+      mustCallAlias =
+          removeCastsAndGetTmpVarIfPresent(((MethodInvocationNode) node).getTarget().getReceiver());
     }
 
-    if (resourceAlias != null) {
-      resourceAlias = removeCasts(resourceAlias);
-    }
-
-    // If resourceAlias is local variable tracked by defs, add lhsLocalVarWithTreeNew to the set
-    // containing resourceAlias. Otherwise, add it to a new set
-    if (resourceAlias instanceof LocalVariableNode
-        && isVarInDefs(facts, (LocalVariableNode) resourceAlias)) {
-      ImmutableSet<LocalVarWithTree> setContainingMustCallAliasParamLocal =
-          getSetContainingAssignmentTreeOfVar(facts, (LocalVariableNode) resourceAlias);
-      ImmutableSet<LocalVarWithTree> newSetContainingMustCallAliasParamLocal =
-          FluentIterable.from(setContainingMustCallAliasParamLocal).append(tmpVarWithTree).toSet();
-      facts.remove(setContainingMustCallAliasParamLocal);
-      facts.add(newSetContainingMustCallAliasParamLocal);
-    } else if (!(resourceAlias instanceof LocalVariableNode
-        || resourceAlias instanceof FieldAccessNode)) {
-      // we do not track the temp var for the call if the MustCallAlias parameter is a local (that
-      // case is handled above; the local must already be in the defs) or a field (handling of
+    // If mustCallAlias is local variable already tracked by some fact, add tmpVarWithTree
+    // to the set containing mustCallAlias. Otherwise, add it to a new set
+    if (mustCallAlias instanceof LocalVariableNode
+        && varInFacts(facts, (LocalVariableNode) mustCallAlias)) {
+      ImmutableSet<LocalVarWithTree> factContainingMustCallAlias =
+          getFactContainingVar(facts, (LocalVariableNode) mustCallAlias);
+      ImmutableSet<LocalVarWithTree> newFact =
+          FluentIterable.from(factContainingMustCallAlias).append(tmpVarWithTree).toSet();
+      facts.remove(factContainingMustCallAlias);
+      facts.add(newFact);
+    } else if (mustCallAlias instanceof LocalVariableNode
+        || mustCallAlias instanceof FieldAccessNode) {
+      // we do not track the call result if the MustCallAlias parameter is a local (that
+      // case is handled above; the local must already be in the facts) or a field (handling of
       // @Owning fields is a completely separate check, and we never need to track an alias of
       // non-@Owning fields)
+      return;
+    } else {
       facts.add(ImmutableSet.of(tmpVarWithTree));
     }
   }
@@ -383,7 +376,8 @@ class MustCallConsistencyAnalyzer {
    * position is an owning field, or when the method's return type is non-owning, which can either
    * be because the method has no return type or because it is annotated with {@link NotOwning}.
    */
-  private boolean shouldSkipInvokeCheck(Set<ImmutableSet<LocalVarWithTree>> defs, Node node) {
+  private boolean skipTrackingInvocationResult(
+      Set<ImmutableSet<LocalVarWithTree>> defs, Node node) {
     Tree callTree = node.getTree();
     if (callTree.getKind() == Tree.Kind.METHOD_INVOCATION) {
       MethodInvocationTree methodInvokeTree = (MethodInvocationTree) callTree;
@@ -449,45 +443,41 @@ class MustCallConsistencyAnalyzer {
    * call
    */
   private void doOwnershipTransferToParameters(
-      Set<ImmutableSet<LocalVarWithTree>> newDefs, Node node) {
+      Set<ImmutableSet<LocalVarWithTree>> facts, Node node) {
 
     if (checker.hasOption(MustCallChecker.NO_LIGHTWEIGHT_OWNERSHIP)) {
       // never transfer ownership to parameters, matching ECJ's default
       return;
     }
 
-    List<Node> arguments = getArgumentsOfMethodOrConstructor(node);
-    List<? extends VariableElement> formals = getFormalsOfMethodOrConstructor(node);
+    List<Node> actualParams = getArgumentsOfMethodOrConstructor(node);
+    List<? extends VariableElement> formalParams = getFormalsOfMethodOrConstructor(node);
 
-    if (arguments.size() != formals.size()) {
+    if (actualParams.size() != formalParams.size()) {
       // this could happen, e.g., with varargs, or with strange cases like generated Enum
       // constructors
       // for now, just skip this case
       // TODO allow for ownership transfer here if needed in future
       return;
     }
-    for (int i = 0; i < arguments.size(); i++) {
-      Node n = arguments.get(i);
-      LocalVariableNode local = null;
+    for (int i = 0; i < actualParams.size(); i++) {
+      Node n = removeCastsAndGetTmpVarIfPresent(actualParams.get(i));
       if (n instanceof LocalVariableNode) {
-        local = (LocalVariableNode) n;
-      } else if (typeFactory.getTempVarForTree(n) != null) {
-        local = typeFactory.getTempVarForTree(n);
-      }
+        LocalVariableNode local = (LocalVariableNode) n;
+        if (varInFacts(facts, local)) {
 
-      if (local != null && isVarInDefs(newDefs, local)) {
+          // check if formal has an @Owning annotation
+          VariableElement formal = formalParams.get(i);
+          Set<AnnotationMirror> annotationMirrors = typeFactory.getDeclAnnotations(formal);
 
-        // check if formal has an @Owning annotation
-        VariableElement formal = formals.get(i);
-        Set<AnnotationMirror> annotationMirrors = typeFactory.getDeclAnnotations(formal);
-
-        if (annotationMirrors.stream()
-            .anyMatch(
-                anno ->
-                    AnnotationUtils.areSameByName(
-                        anno, "org.checkerframework.checker.mustcall.qual.Owning"))) {
-          // transfer ownership!
-          newDefs.remove(getSetContainingAssignmentTreeOfVar(newDefs, local));
+          if (annotationMirrors.stream()
+              .anyMatch(
+                  anno ->
+                      AnnotationUtils.areSameByName(
+                          anno, "org.checkerframework.checker.mustcall.qual.Owning"))) {
+            // transfer ownership!
+            facts.remove(getFactContainingVar(facts, local));
+          }
         }
       }
     }
@@ -592,7 +582,7 @@ class MustCallConsistencyAnalyzer {
    */
   private void removeFactContainingVar(
       Set<ImmutableSet<LocalVarWithTree>> facts, LocalVariableNode var) {
-    Set<LocalVarWithTree> setContainingRhs = getSetContainingAssignmentTreeOfVar(facts, var);
+    Set<LocalVarWithTree> setContainingRhs = getFactContainingVar(facts, var);
     facts.remove(setContainingRhs);
   }
 
@@ -732,7 +722,7 @@ class MustCallConsistencyAnalyzer {
     // 1) an assignment to a field of a newly-declared local variable that can't be in scope
     // for the containing method, or 2) the rhs is a null literal (so there's nothing to reset).
     if (!(receiver instanceof LocalVariableNode
-            && isVarInDefs(newDefs, (LocalVariableNode) receiver))
+            && varInFacts(newDefs, (LocalVariableNode) receiver))
         && !(node.getExpression() instanceof NullLiteralNode)) {
       checkEnclosingMethodIsCreatesObligation(node, enclosingMethod);
     }
@@ -893,6 +883,8 @@ class MustCallConsistencyAnalyzer {
   }
 
   private Node removeCastsAndGetTmpVarIfPresent(Node node) {
+    // TODO create temp vars for TypeCastNodes as well, so we don't need to explicitly remove casts
+    // here
     node = removeCasts(node);
     LocalVariableNode tmpVar = typeFactory.getTempVarForTree(node);
     return tmpVar != null ? tmpVar : node;
@@ -1178,7 +1170,7 @@ class MustCallConsistencyAnalyzer {
    * Checks whether a pair exists in {@code defs} that its first var is equal to {@code node} or
    * not. This is useful when we want to check if a LocalVariableNode is overwritten or not.
    */
-  private static boolean isVarInDefs(
+  private static boolean varInFacts(
       Set<ImmutableSet<LocalVarWithTree>> defs, LocalVariableNode node) {
     return defs.stream()
         .flatMap(Set::stream)
@@ -1186,7 +1178,7 @@ class MustCallConsistencyAnalyzer {
         .anyMatch(elem -> elem.equals(node.getElement()));
   }
 
-  private static ImmutableSet<LocalVarWithTree> getSetContainingAssignmentTreeOfVar(
+  private static ImmutableSet<LocalVarWithTree> getFactContainingVar(
       Set<ImmutableSet<LocalVarWithTree>> defs, LocalVariableNode node) {
     return defs.stream()
         .filter(
