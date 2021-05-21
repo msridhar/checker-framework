@@ -988,7 +988,7 @@ class MustCallConsistencyAnalyzer {
       Block succ = succAndExcType.first;
       TypeMirror exceptionType = succAndExcType.second;
       Set<ImmutableSet<LocalVarWithTree>> curFacts =
-          handleTernaySuccIfNeeded(curBlock, succ, facts);
+          handleTernarySuccIfNeeded(curBlock, succ, facts);
       // factsForSucc eventually contains the facts to propagate to succ.  It may be mutated in the
       // loop below.
       Set<ImmutableSet<LocalVarWithTree>> factsForSucc = new LinkedHashSet<>();
@@ -1085,7 +1085,7 @@ class MustCallConsistencyAnalyzer {
    * is not a {@link ConditionalExpressionTree}. The check for a {@link ConditionalExpressionTree}
    * is to accommodate our handling of ternary expressions, where we track the temporary variable
    * for the expression at the program point before that expression; see {@link
-   * #handleTernaySuccIfNeeded(Block, Block, Set)}.
+   * #handleTernarySuccIfNeeded(Block, Block, Set)}.
    */
   private boolean varNotPresentInStoreAndNotForTernary(CFStore store, LocalVarWithTree assign) {
     return store.getValue(assign.localVar) == null
@@ -1115,7 +1115,7 @@ class MustCallConsistencyAnalyzer {
    * @return a new set of facts to account for the {@link TernaryExpressionNode}, or just {@code
    *     facts} if no handling is required.
    */
-  private Set<ImmutableSet<LocalVarWithTree>> handleTernaySuccIfNeeded(
+  private Set<ImmutableSet<LocalVarWithTree>> handleTernarySuccIfNeeded(
       Block pred, Block succ, Set<ImmutableSet<LocalVarWithTree>> facts) {
     List<Node> succNodes = succ.getNodes();
     if (succNodes.isEmpty() || !(succNodes.get(0) instanceof TernaryExpressionNode)) {
@@ -1161,7 +1161,7 @@ class MustCallConsistencyAnalyzer {
    * @return the owning formal parameters of the method that corresponds to the given cfg
    */
   private Set<ImmutableSet<LocalVarWithTree>> computeOwningParameters(ControlFlowGraph cfg) {
-    Set<ImmutableSet<LocalVarWithTree>> init = new LinkedHashSet<>();
+    Set<ImmutableSet<LocalVarWithTree>> result = new LinkedHashSet<>();
     UnderlyingAST underlyingAST = cfg.getUnderlyingAST();
     if (underlyingAST instanceof UnderlyingAST.CFGMethod) {
       // TODO what about lambdas?
@@ -1173,32 +1173,38 @@ class MustCallConsistencyAnalyzer {
             || (typeFactory.hasMustCall(param)
                 && !checker.hasOption(MustCallChecker.NO_LIGHTWEIGHT_OWNERSHIP)
                 && paramElement.getAnnotation(Owning.class) != null)) {
-          Set<LocalVarWithTree> setOfLocals = new LinkedHashSet<>();
-          setOfLocals.add(new LocalVarWithTree(new LocalVariable(paramElement), param));
-          init.add(ImmutableSet.copyOf(setOfLocals));
+          result.add(ImmutableSet.of(new LocalVarWithTree(new LocalVariable(paramElement), param)));
           // Increment numMustCall for each @Owning parameter tracked by the enclosing method
           incrementNumMustCall(paramElement);
         }
       }
     }
-    return init;
+    return result;
   }
 
   /**
-   * Checks whether a pair exists in {@code defs} that its first var is equal to {@code node} or
-   * not. This is useful when we want to check if a LocalVariableNode is overwritten or not.
+   * Checks whether there is some fact {@code f} in {@code facts} such that {@code f} contains a
+   * {@link LocalVarWithTree} whose local variable is {@code node}
    */
   private static boolean varInFacts(
-      Set<ImmutableSet<LocalVarWithTree>> defs, LocalVariableNode node) {
-    return defs.stream()
+      Set<ImmutableSet<LocalVarWithTree>> facts, LocalVariableNode node) {
+    return facts.stream()
         .flatMap(Set::stream)
         .map(assign -> assign.localVar.getElement())
         .anyMatch(elem -> elem.equals(node.getElement()));
   }
 
+  /**
+   * gets the single fact in a set of facts containing some variable
+   *
+   * @param facts set of facts
+   * @param node variable of interest
+   * @return the fact in {@code facts} containing {@code node}, or {@code null} if there is no such
+   *     fact
+   */
   private static ImmutableSet<LocalVarWithTree> getFactContainingVar(
-      Set<ImmutableSet<LocalVarWithTree>> defs, LocalVariableNode node) {
-    return defs.stream()
+      Set<ImmutableSet<LocalVarWithTree>> facts, LocalVariableNode node) {
+    return facts.stream()
         .filter(
             set ->
                 set.stream()
@@ -1215,25 +1221,30 @@ class MustCallConsistencyAnalyzer {
   }
 
   /**
-   * Creates the appropriate @CalledMethods annotation that corresponds to the @MustCall annotation
-   * declared on the class type of {@code localVarWithTree.first}. Then, it gets @CalledMethod
-   * annotation of {@code localVarWithTree.first} to do a subtyping check and reports an error if
-   * the check fails.
+   * For the given fact, checks that at least one of its variables has its {@code @MustCall}
+   * obligation satisfied, based on {@code @CalledMethods} and {@code @MustCall} types in the given
+   * stores
+   *
+   * @param fact the fact
+   * @param cmStore the called-methods store
+   * @param mcStore the must-call store
+   * @param outOfScopeReason if the {@code @MustCall} obligation is not satisfied, a useful
+   *     explanation to include in the error message
    */
   private void checkMustCall(
-      ImmutableSet<LocalVarWithTree> localVarWithTreeSet,
+      ImmutableSet<LocalVarWithTree> fact,
       CFStore cmStore,
       CFStore mcStore,
       String outOfScopeReason) {
 
-    List<String> mustCallValue = typeFactory.getMustCallValue(localVarWithTreeSet, mcStore);
+    List<String> mustCallValue = typeFactory.getMustCallValue(fact, mcStore);
     // optimization: if there are no must-call methods, we do not need to perform the check
     if (mustCallValue == null || mustCallValue.isEmpty()) {
       return;
     }
 
     boolean mustCallSatisfied = false;
-    for (LocalVarWithTree localVarWithTree : localVarWithTreeSet) {
+    for (LocalVarWithTree localVarWithTree : fact) {
 
       // sometimes the store is null!  this looks like a bug in checker dataflow.
       // TODO track down and report the root-cause bug
@@ -1263,9 +1274,8 @@ class MustCallConsistencyAnalyzer {
     }
 
     if (!mustCallSatisfied) {
-      if (reportedMustCallErrors.stream()
-          .noneMatch(localVarTree -> localVarWithTreeSet.contains(localVarTree))) {
-        LocalVarWithTree firstlocalVarWithTree = localVarWithTreeSet.iterator().next();
+      if (reportedMustCallErrors.stream().noneMatch(fact::contains)) {
+        LocalVarWithTree firstlocalVarWithTree = fact.iterator().next();
         if (!checker.shouldSkipUses(TreeUtils.elementFromTree(firstlocalVarWithTree.tree))) {
           reportedMustCallErrors.add(firstlocalVarWithTree);
           checker.reportError(
