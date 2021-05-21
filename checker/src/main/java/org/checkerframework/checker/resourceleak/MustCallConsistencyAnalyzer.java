@@ -1,5 +1,6 @@
 package org.checkerframework.checker.resourceleak;
 
+import com.google.common.base.Preconditions;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableSet;
 import com.sun.source.tree.ConditionalExpressionTree;
@@ -146,24 +147,25 @@ class MustCallConsistencyAnalyzer {
     }
   }
 
-  private void handleInvocation(Set<ImmutableSet<LocalVarWithTree>> defs, Node node) {
-    doOwnershipTransferToParameters(defs, node);
+  private void handleInvocation(Set<ImmutableSet<LocalVarWithTree>> facts, Node node) {
+    doOwnershipTransferToParameters(facts, node);
     // Count calls to @CreatesObligation methods as creating new resources, for now.
     if (node instanceof MethodInvocationNode
         && typeFactory.canCreateObligations()
         && typeFactory.hasCreatesObligation((MethodInvocationNode) node)) {
-      checkCreatesObligationInvocation(defs, (MethodInvocationNode) node);
+      checkCreatesObligationInvocation(facts, (MethodInvocationNode) node);
       incrementNumMustCall(node);
     }
 
-    if (shouldSkipInvokeCheck(defs, node)) {
+    if (shouldSkipInvokeCheck(facts, node)) {
       return;
     }
 
     if (typeFactory.hasMustCall(node.getTree())) {
+      // TODO do we need both this call and the one earlier in the method?
       incrementNumMustCall(node);
     }
-    trackResultOfInvocation(defs, node);
+    trackResultOfInvocation(facts, node);
   }
 
   /**
@@ -176,7 +178,7 @@ class MustCallConsistencyAnalyzer {
    */
   private void handleThisOrSuperConstructorMustCallAlias(
       Set<ImmutableSet<LocalVarWithTree>> defs, Node node) {
-    Node mcaParam = getVarOrTempVarPassedAsMustCallAliasParam(node);
+    Node mcaParam = getMustCallAliasParamVar(node);
     // If the MCA param is also in the def set, then remove it -
     // its obligation has been fulfilled by being passed on to the MCA constructor (because we must
     // be in a constructor body if we've encountered a this/super constructor call).
@@ -336,7 +338,7 @@ class MustCallConsistencyAnalyzer {
     LocalVarWithTree tmpVarWithTree = new LocalVarWithTree(new LocalVariable(tmpVar), tree);
 
     // Set resourceAlias to the MCA parameter if any exists, otherwise it remains null
-    Node resourceAlias = getVarOrTempVarPassedAsMustCallAliasParam(node);
+    Node resourceAlias = getMustCallAliasParamVar(node);
 
     // If resourceAlias is still null and node returns @This, set resourceAlias to the receiver
     if (resourceAlias == null
@@ -407,7 +409,7 @@ class MustCallConsistencyAnalyzer {
    *     a non-owning pointer
    */
   private boolean returnTypeIsMustCallAliasWithIgnorable(MethodInvocationNode node) {
-    Node mcaParam = getVarOrTempVarPassedAsMustCallAliasParam(node);
+    Node mcaParam = getMustCallAliasParamVar(node);
     return mcaParam instanceof FieldAccessNode || mcaParam instanceof ThisNode;
   }
 
@@ -856,47 +858,44 @@ class MustCallConsistencyAnalyzer {
   }
 
   /**
-   * This method tries to find a local variable passed as a @MustCallAlias parameter. In the base
-   * case, if {@code node} is a local variable, it just gets returned. Otherwise, if node is a call
-   * (or a call wrapped in a cast), the code finds the parameter passed in the @MustCallAlias
-   * position, and recurses on that parameter.
+   * Finds the actual parameter passed in the {@code @MustCallAlias} position for a call.
    *
-   * @param node a node
-   * @return {@code node} iff {@code node} represents a local variable that is passed as
-   *     a @MustCallAlias parameter, otherwise null
+   * @param node node representing the call
+   * @return if {@code node} invokes a method with a {@code @MustCallAlias} annotation on some
+   *     formal parameter, returns the result of calling {@link
+   *     #removeCastsAndGetTmpVarIfPresent(Node)} on the actual parameter passed in that position.
+   *     Otherwise, returns {@code null}.
    */
-  private @Nullable Node getVarOrTempVarPassedAsMustCallAliasParam(Node node) {
-    node = removeCasts(node);
-    Node n = null;
-    if (node instanceof MethodInvocationNode || node instanceof ObjectCreationNode) {
+  private @Nullable Node getMustCallAliasParamVar(Node node) {
+    Preconditions.checkArgument(
+        node instanceof MethodInvocationNode || node instanceof ObjectCreationNode);
+    if (!typeFactory.hasMustCallAlias(node.getTree())) {
+      return null;
+    }
 
-      if (!typeFactory.hasMustCallAlias(node.getTree())) {
-        return null;
-      }
-
-      List<Node> arguments = getArgumentsOfMethodOrConstructor(node);
-      List<? extends VariableElement> formals = getFormalsOfMethodOrConstructor(node);
-
-      for (int i = 0; i < arguments.size(); i++) {
-        if (typeFactory.hasMustCallAlias(formals.get(i))) {
-          n = arguments.get(i);
-          if (n instanceof MethodInvocationNode || n instanceof ObjectCreationNode) {
-            n = typeFactory.getTempVarForTree(n);
-            break;
-          }
-        }
-      }
-
-      // If node does't have @MustCallAlias parameter then it checks the receiver parameter
-      if (n == null && node instanceof MethodInvocationNode) {
-        n = ((MethodInvocationNode) node).getTarget().getReceiver();
-        if (n instanceof MethodInvocationNode || n instanceof ObjectCreationNode) {
-          n = typeFactory.getTempVarForTree(n);
-        }
+    Node result = null;
+    List<Node> actualParams = getArgumentsOfMethodOrConstructor(node);
+    List<? extends VariableElement> formalParams = getFormalsOfMethodOrConstructor(node);
+    for (int i = 0; i < actualParams.size(); i++) {
+      if (typeFactory.hasMustCallAlias(formalParams.get(i))) {
+        result = actualParams.get(i);
+        break;
       }
     }
 
-    return n;
+    // If none of the parameters were @MustCallAlias, it must be the receiver
+    if (result == null && node instanceof MethodInvocationNode) {
+      result = ((MethodInvocationNode) node).getTarget().getReceiver();
+    }
+
+    result = removeCastsAndGetTmpVarIfPresent(result);
+    return result;
+  }
+
+  private Node removeCastsAndGetTmpVarIfPresent(Node node) {
+    node = removeCasts(node);
+    LocalVariableNode tmpVar = typeFactory.getTempVarForTree(node);
+    return tmpVar != null ? tmpVar : node;
   }
 
   private List<Node> getArgumentsOfMethodOrConstructor(Node node) {
