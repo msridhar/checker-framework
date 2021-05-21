@@ -163,7 +163,7 @@ class MustCallConsistencyAnalyzer {
     if (typeFactory.hasMustCall(node.getTree())) {
       incrementNumMustCall(node);
     }
-    updateDefsWithTempVar(defs, node);
+    trackResultOfInvocation(defs, node);
   }
 
   /**
@@ -180,7 +180,7 @@ class MustCallConsistencyAnalyzer {
     // If the MCA param is also in the def set, then remove it -
     // its obligation has been fulfilled by being passed on to the MCA constructor (because we must
     // be in a constructor body if we've encountered a this/super constructor call).
-    if (mcaParam instanceof LocalVariableNode && isVarInDefs(defs, (LocalVariableNode) mcaParam)) {
+    if (mcaParam instanceof LocalVariableNode) {
       removeFactContainingVar(defs, (LocalVariableNode) mcaParam);
     }
   }
@@ -326,63 +326,60 @@ class MustCallConsistencyAnalyzer {
    * ownership of the result. Searches for the set of same resources in defs and add the new
    * LocalVarWithTree to it if one exists. Otherwise creates a new set.
    */
-  private void updateDefsWithTempVar(Set<ImmutableSet<LocalVarWithTree>> defs, Node node) {
+  private void trackResultOfInvocation(Set<ImmutableSet<LocalVarWithTree>> facts, Node node) {
     Tree tree = node.getTree();
-    LocalVariableNode temporaryLocal = typeFactory.getTempVarForTree(node);
-    if (temporaryLocal != null) {
+    // we need to track the result of the call iff there is a temporary variable for the node
+    LocalVariableNode tmpVar = typeFactory.getTempVarForTree(node);
+    if (tmpVar == null) {
+      return;
+    }
+    LocalVarWithTree tmpVarWithTree = new LocalVarWithTree(new LocalVariable(tmpVar), tree);
 
-      LocalVarWithTree lhsLocalVarWithTreeNew =
-          new LocalVarWithTree(new LocalVariable(temporaryLocal), tree);
+    // Set resourceAlias to the MCA parameter if any exists, otherwise it remains null
+    Node resourceAlias = getVarOrTempVarPassedAsMustCallAliasParam(node);
 
-      Node sameResource = null;
-      // Set sameResource to the MCA parameter if any exists, otherwise it remains null
-      if (node instanceof ObjectCreationNode || node instanceof MethodInvocationNode) {
-        sameResource = getVarOrTempVarPassedAsMustCallAliasParam(node);
+    // If resourceAlias is still null and node returns @This, set resourceAlias to the receiver
+    if (resourceAlias == null
+        && node instanceof MethodInvocationNode
+        && typeFactory.returnsThis((MethodInvocationTree) tree)) {
+      // TODO create a single method to get either a node or the temp var for the node and use it
+      // everywhere
+      resourceAlias = ((MethodInvocationNode) node).getTarget().getReceiver();
+      if (resourceAlias instanceof MethodInvocationNode) {
+        resourceAlias = typeFactory.getTempVarForTree(resourceAlias);
       }
+    }
 
-      // If sameResource is still null and node returns @This, set sameResource to the receiver
-      if (sameResource == null
-          && node instanceof MethodInvocationNode
-          && typeFactory.returnsThis((MethodInvocationTree) tree)) {
-        sameResource = ((MethodInvocationNode) node).getTarget().getReceiver();
-        if (sameResource instanceof MethodInvocationNode) {
-          sameResource = typeFactory.getTempVarForTree(sameResource);
-        }
-      }
+    if (resourceAlias != null) {
+      resourceAlias = removeCasts(resourceAlias);
+    }
 
-      if (sameResource != null) {
-        sameResource = removeCasts(sameResource);
-      }
-
-      // If sameResource is local variable tracked by defs, add lhsLocalVarWithTreeNew to the set
-      // containing sameResource. Otherwise, add it to a new set
-      if (sameResource instanceof LocalVariableNode
-          && isVarInDefs(defs, (LocalVariableNode) sameResource)) {
-        ImmutableSet<LocalVarWithTree> setContainingMustCallAliasParamLocal =
-            getSetContainingAssignmentTreeOfVar(defs, (LocalVariableNode) sameResource);
-        ImmutableSet<LocalVarWithTree> newSetContainingMustCallAliasParamLocal =
-            FluentIterable.from(setContainingMustCallAliasParamLocal)
-                .append(lhsLocalVarWithTreeNew)
-                .toSet();
-        defs.remove(setContainingMustCallAliasParamLocal);
-        defs.add(newSetContainingMustCallAliasParamLocal);
-      } else if (!(sameResource instanceof LocalVariableNode
-          || sameResource instanceof FieldAccessNode)) {
-        // we do not track the temp var for the call if the MustCallAlias parameter is a local (that
-        // case is handled above; the local must already be in the defs) or a field (handling of
-        // @Owning fields is a completely separate check, and we never need to track an alias of
-        // non-@Owning fields)
-        defs.add(ImmutableSet.of(lhsLocalVarWithTreeNew));
-      }
+    // If resourceAlias is local variable tracked by defs, add lhsLocalVarWithTreeNew to the set
+    // containing resourceAlias. Otherwise, add it to a new set
+    if (resourceAlias instanceof LocalVariableNode
+        && isVarInDefs(facts, (LocalVariableNode) resourceAlias)) {
+      ImmutableSet<LocalVarWithTree> setContainingMustCallAliasParamLocal =
+          getSetContainingAssignmentTreeOfVar(facts, (LocalVariableNode) resourceAlias);
+      ImmutableSet<LocalVarWithTree> newSetContainingMustCallAliasParamLocal =
+          FluentIterable.from(setContainingMustCallAliasParamLocal).append(tmpVarWithTree).toSet();
+      facts.remove(setContainingMustCallAliasParamLocal);
+      facts.add(newSetContainingMustCallAliasParamLocal);
+    } else if (!(resourceAlias instanceof LocalVariableNode
+        || resourceAlias instanceof FieldAccessNode)) {
+      // we do not track the temp var for the call if the MustCallAlias parameter is a local (that
+      // case is handled above; the local must already be in the defs) or a field (handling of
+      // @Owning fields is a completely separate check, and we never need to track an alias of
+      // non-@Owning fields)
+      facts.add(ImmutableSet.of(tmpVarWithTree));
     }
   }
 
   /**
-   * Checks for cases where we do not need to track a method. We can skip the check when the method
-   * invocation is a call to "this" or a super constructor call, when the method's return type is
-   * annotated with MustCallAlias and the argument in the corresponding position is an owning field,
-   * or when the method's return type is non-owning, which can either be because the method has no
-   * return type or because it is annotated with {@link NotOwning}.
+   * Checks for cases where we do not need to track the result of a method call. We can skip the
+   * check when the method invocation is a call to "this" or a super constructor call, when the
+   * method's return type is annotated with MustCallAlias and the argument in the corresponding
+   * position is an owning field, or when the method's return type is non-owning, which can either
+   * be because the method has no return type or because it is annotated with {@link NotOwning}.
    */
   private boolean shouldSkipInvokeCheck(Set<ImmutableSet<LocalVarWithTree>> defs, Node node) {
     Tree callTree = node.getTree();
