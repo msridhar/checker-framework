@@ -356,7 +356,7 @@ public abstract class CFAbstractTransfer<
             atypeFactory.getAnnotatedType(fieldValue.getKey().getField());
         V lubbedValue =
             analysis.createAbstractValue(declaredType).leastUpperBound(fieldValue.getValue());
-        store.fieldValues.put(fieldValue.getKey(), lubbedValue);
+        store.fieldValues = store.fieldValues.plus(fieldValue.getKey(), lubbedValue);
       }
     } else {
       assert false : "Unexpected tree: " + underlyingAST;

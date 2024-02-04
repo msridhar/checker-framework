@@ -107,14 +107,14 @@ public class InitializationStore<V extends CFAbstractValue<V>, S extends Initial
   public void updateForMethodCall(
       MethodInvocationNode n, AnnotatedTypeFactory atypeFactory, V val) {
     // Remove invariant annotated fields to avoid performance issue reported in #1438.
-    for (FieldAccess invariantField : invariantFields.keySet()) {
-      fieldValues.remove(invariantField);
-    }
-
+    //    for (FieldAccess invariantField : invariantFields.keySet()) {
+    //      fieldValues.remove(invariantField);
+    //    }
+    fieldValues = fieldValues.minusAll(invariantFields.keySet());
     super.updateForMethodCall(n, atypeFactory, val);
 
     // Add invariant annotation again.
-    fieldValues.putAll(invariantFields);
+    fieldValues = fieldValues.plusAll(invariantFields);
   }
 
   /** A copy constructor. */

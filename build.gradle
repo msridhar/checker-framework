@@ -766,6 +766,7 @@ subprojects {
     // relocate 'sun', 'org.checkerframework.sun'
     relocate 'com.google', 'org.checkerframework.com.google'
     relocate 'plume', 'org.checkerframework.plume'
+    relocate 'org.pcollections', 'org.checkerframework.org.pcollections'
 
     exclude '**/module-info.class'
   }

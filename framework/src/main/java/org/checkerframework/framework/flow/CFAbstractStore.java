@@ -42,6 +42,8 @@ import org.checkerframework.javacutil.AnnotationBuilder;
 import org.checkerframework.javacutil.AnnotationUtils;
 import org.checkerframework.javacutil.BugInCF;
 import org.checkerframework.javacutil.ElementUtils;
+import org.pcollections.HashTreePMap;
+import org.pcollections.PMap;
 import org.plumelib.util.CollectionsPlume;
 import org.plumelib.util.IPair;
 import org.plumelib.util.ToStringComparator;
@@ -75,11 +77,13 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
   protected V thisValue;
 
   /** Information collected about fields, using the internal representation {@link FieldAccess}. */
-  protected Map<FieldAccess, V> fieldValues;
+  protected PMap<FieldAccess, V> fieldValues;
 
   /**
    * Returns information about fields. Clients should not side-effect the returned value, which is
    * aliased to internal state.
+   *
+   * <p>TODO make return type PMap?
    *
    * @return information about fields
    */
@@ -141,7 +145,7 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
     this.analysis = analysis;
     localVariableValues = new HashMap<>();
     thisValue = null;
-    fieldValues = new HashMap<>();
+    fieldValues = HashTreePMap.empty();
     methodValues = new HashMap<>();
     arrayValues = new HashMap<>();
     classValues = new HashMap<>();
@@ -161,7 +165,7 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
     this.analysis = other.analysis;
     localVariableValues = new HashMap<>(other.localVariableValues);
     thisValue = other.thisValue;
-    fieldValues = new HashMap<>(other.fieldValues);
+    fieldValues = other.fieldValues;
     methodValues = new HashMap<>(other.methodValues);
     arrayValues = new HashMap<>(other.arrayValues);
     classValues = new HashMap<>(other.classValues);
@@ -369,7 +373,7 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
    */
   private void updateFieldValuesForMethodCall(
       GenericAnnotatedTypeFactory<V, S, ?, ?> atypeFactory) {
-    Map<FieldAccess, V> newFieldValues = new HashMap<>(CollectionsPlume.mapCapacity(fieldValues));
+    PMap<FieldAccess, V> newFieldValues = HashTreePMap.empty();
     for (Map.Entry<FieldAccess, V> e : fieldValues.entrySet()) {
       FieldAccess fieldAccess = e.getKey();
       V value = e.getValue();
@@ -377,7 +381,7 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
       V newValue = newFieldValueAfterMethodCall(fieldAccess, atypeFactory, value);
       if (newValue != null) {
         // Keep information for all hierarchies where we had a monotonic annotation.
-        newFieldValues.put(fieldAccess, newValue);
+        newFieldValues = newFieldValues.plus(fieldAccess, newValue);
       }
     }
     fieldValues = newFieldValues;
@@ -637,7 +641,7 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
         V oldValue = fieldValues.get(fieldAcc);
         V newValue = merger.apply(oldValue, value);
         if (newValue != null) {
-          fieldValues.put(fieldAcc, newValue);
+          fieldValues = fieldValues.plus(fieldAcc, newValue);
         }
       }
     } else if (expr instanceof MethodCall) {
@@ -761,7 +765,7 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
       localVariableValues.remove(localVar);
     } else if (expr instanceof FieldAccess) {
       FieldAccess fieldAcc = (FieldAccess) expr;
-      fieldValues.remove(fieldAcc);
+      fieldValues = fieldValues.minus(fieldAcc);
     } else if (expr instanceof MethodCall) {
       MethodCall method = (MethodCall) expr;
       methodValues.remove(method);
@@ -906,7 +910,7 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
       if (sequentialSemantics
           || isMonotonicUpdate(fieldAccess, val)
           || fieldAccess.isUnassignableByOtherCode()) {
-        fieldValues.put(fieldAccess, val);
+        fieldValues = fieldValues.plus(fieldAccess, val);
       }
     }
   }
@@ -1203,7 +1207,7 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
         V otherVal = e.getValue();
         V mergedVal = upperBoundOfValues(otherVal, thisVal, shouldWiden);
         if (mergedVal != null) {
-          newStore.fieldValues.put(el, mergedVal);
+          newStore.fieldValues = newStore.fieldValues.plus(el, mergedVal);
         }
       }
     }
