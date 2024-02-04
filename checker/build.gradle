@@ -50,7 +50,6 @@ dependencies {
   // file. :-( So update it and re-build it locally when updating this.
   implementation "org.plumelib:reflection-util:${versions.reflectionUtil}"
   implementation "org.plumelib:plume-util:${versions.plumeUtil}"
-  implementation 'org.pcollections:pcollections:4.0.1'
 
   // Dependencies added to "shadow" appear as dependencies in Maven Central.
   shadow project(':checker-qual')

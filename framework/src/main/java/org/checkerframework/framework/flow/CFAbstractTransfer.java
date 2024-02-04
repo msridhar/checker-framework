@@ -9,7 +9,6 @@ import com.sun.source.util.TreePath;
 import com.sun.tools.javac.code.Symbol.ClassSymbol;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -82,6 +81,7 @@ import org.checkerframework.javacutil.BugInCF;
 import org.checkerframework.javacutil.ElementUtils;
 import org.checkerframework.javacutil.TreePathUtil;
 import org.checkerframework.javacutil.TreeUtils;
+import org.pcollections.PMap;
 
 /**
  * The default analysis transfer function for the Checker Framework. It propagates information
@@ -350,14 +350,16 @@ public abstract class CFAbstractTransfer<
       }
 
       // We want the initialization stuff, but need to throw out any refinements.
-      Map<FieldAccess, V> fieldValuesClone = new HashMap<>(store.fieldValues);
-      for (Map.Entry<FieldAccess, V> fieldValue : fieldValuesClone.entrySet()) {
+      // Map<FieldAccess, V> fieldValuesClone = new HashMap<>(store.fieldValues);
+      PMap<FieldAccess, V> newFieldValues = store.fieldValues;
+      for (Map.Entry<FieldAccess, V> fieldValue : store.fieldValues.entrySet()) {
         AnnotatedTypeMirror declaredType =
             atypeFactory.getAnnotatedType(fieldValue.getKey().getField());
         V lubbedValue =
             analysis.createAbstractValue(declaredType).leastUpperBound(fieldValue.getValue());
-        store.fieldValues = store.fieldValues.plus(fieldValue.getKey(), lubbedValue);
+        newFieldValues = newFieldValues.plus(fieldValue.getKey(), lubbedValue);
       }
+      store.fieldValues = newFieldValues;
     } else {
       assert false : "Unexpected tree: " + underlyingAST;
       store = null;

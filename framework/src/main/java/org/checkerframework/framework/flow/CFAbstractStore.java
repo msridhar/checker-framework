@@ -269,7 +269,13 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
 
       // update field values
       if (sideEffectsUnrefineAliases) {
-        fieldValues.entrySet().removeIf(e -> !e.getKey().isUnmodifiableByOtherCode());
+        PMap<FieldAccess, V> newFieldValues = fieldValues;
+        for (FieldAccess access : fieldValues.keySet()) {
+          if (!access.isUnmodifiableByOtherCode()) {
+            newFieldValues = newFieldValues.minus(access);
+          }
+        }
+        fieldValues = newFieldValues;
       } else {
         // Case 2 (unassignable fields) and case 3 (monotonic fields)
         updateFieldValuesForMethodCall(gatypeFactory);
@@ -971,13 +977,15 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
    */
   protected void removeConflicting(FieldAccess fieldAccess, @Nullable V val) {
     Iterator<Map.Entry<FieldAccess, V>> fieldValuesIterator = fieldValues.entrySet().iterator();
+    PMap<FieldAccess, V> newFieldValues = fieldValues;
     while (fieldValuesIterator.hasNext()) {
       Map.Entry<FieldAccess, V> entry = fieldValuesIterator.next();
       FieldAccess otherFieldAccess = entry.getKey();
       V otherVal = entry.getValue();
       // case 2:
       if (otherFieldAccess.getReceiver().containsModifiableAliasOf(this, fieldAccess)) {
-        fieldValuesIterator.remove(); // remove information completely
+        // fieldValuesIterator.remove(); // remove information completely
+        newFieldValues = newFieldValues.minus(otherFieldAccess);
       }
       // case 1:
       else if (fieldAccess.getField().equals(otherFieldAccess.getField())) {
@@ -985,15 +993,18 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
           if (!otherFieldAccess.isFinal()) {
             if (val != null) {
               V newVal = val.leastUpperBound(otherVal);
-              entry.setValue(newVal);
+              // entry.setValue(newVal);
+              newFieldValues = newFieldValues.plus(otherFieldAccess, newVal);
             } else {
               // remove information completely
-              fieldValuesIterator.remove();
+              // fieldValuesIterator.remove();
+              newFieldValues = newFieldValues.minus(otherFieldAccess);
             }
           }
         }
       }
     }
+    fieldValues = newFieldValues;
 
     Iterator<Map.Entry<ArrayAccess, V>> arrayValuesIterator = arrayValues.entrySet().iterator();
     while (arrayValuesIterator.hasNext()) {
@@ -1044,6 +1055,7 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
     }
 
     // case 2:
+    PMap<FieldAccess, V> newFieldValues = fieldValues;
     Iterator<Map.Entry<FieldAccess, V>> fieldValuesIterator = fieldValues.entrySet().iterator();
     while (fieldValuesIterator.hasNext()) {
       Map.Entry<FieldAccess, V> entry = fieldValuesIterator.next();
@@ -1052,9 +1064,11 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
       if (otherReceiver.containsModifiableAliasOf(this, arrayAccess)
           && otherReceiver.containsOfClass(ArrayAccess.class)) {
         // remove information completely
-        fieldValuesIterator.remove();
+        // fieldValuesIterator.remove();
+        newFieldValues = newFieldValues.minus(otherFieldAccess);
       }
     }
+    fieldValues = newFieldValues;
 
     // case 3:
     methodValues.clear();
@@ -1075,14 +1089,17 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
    */
   protected void removeConflicting(LocalVariable var) {
     Iterator<Map.Entry<FieldAccess, V>> fieldValuesIterator = fieldValues.entrySet().iterator();
+    PMap<FieldAccess, V> newFieldValues = fieldValues;
     while (fieldValuesIterator.hasNext()) {
       Map.Entry<FieldAccess, V> entry = fieldValuesIterator.next();
       FieldAccess otherFieldAccess = entry.getKey();
       // case 1:
       if (otherFieldAccess.containsSyntacticEqualJavaExpression(var)) {
-        fieldValuesIterator.remove();
+        // fieldValuesIterator.remove();
+        newFieldValues = newFieldValues.minus(otherFieldAccess);
       }
     }
+    fieldValues = newFieldValues;
 
     Iterator<Map.Entry<ArrayAccess, V>> arrayValuesIterator = arrayValues.entrySet().iterator();
     while (arrayValuesIterator.hasNext()) {

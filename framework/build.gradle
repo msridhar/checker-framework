@@ -46,7 +46,8 @@ dependencies {
   implementation "org.plumelib:plume-util:${versions.plumeUtil}"
   implementation "org.plumelib:reflection-util:${versions.reflectionUtil}"
   implementation 'io.github.classgraph:classgraph:4.8.165'
-  implementation 'org.pcollections:pcollections:4.0.1'
+  // api dependence since types are exposed to subclasses (and possibly future method types)
+  api 'org.pcollections:pcollections:4.0.1'
 
   testImplementation group: 'junit', name: 'junit', version: '4.13.2'
   testImplementation project(':framework-test')

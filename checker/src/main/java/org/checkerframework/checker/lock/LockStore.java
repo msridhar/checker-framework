@@ -81,7 +81,7 @@ public class LockStore extends CFAbstractStore<CFValue, LockStore> {
       CFValue current = fieldValues.get(fieldAcc);
       CFValue value = changeLockAnnoToTop(je, current);
       if (value != null) {
-        fieldValues.put(fieldAcc, value);
+        fieldValues = fieldValues.plus(fieldAcc, value);
       }
     } else if (je instanceof MethodCall) {
       MethodCall method = (MethodCall) je;
@@ -183,9 +183,9 @@ public class LockStore extends CFAbstractStore<CFValue, LockStore> {
       for (FieldAccess field : new ArrayList<>(fieldValues.keySet())) {
         CFValue newValue = changeLockAnnoToTop(field, fieldValues.get(field));
         if (newValue != null) {
-          fieldValues.put(field, newValue);
+          fieldValues = fieldValues.plus(field, newValue);
         } else {
-          fieldValues.remove(field);
+          fieldValues = fieldValues.minus(field);
         }
       }
 
@@ -229,7 +229,7 @@ public class LockStore extends CFAbstractStore<CFValue, LockStore> {
         CFValue oldValue = fieldValues.get(fieldAcc);
         CFValue newValue = value.mostSpecific(oldValue, null);
         if (newValue != null) {
-          fieldValues.put(fieldAcc, newValue);
+          fieldValues = fieldValues.plus(fieldAcc, newValue);
         }
       } else if (je instanceof MethodCall) {
         MethodCall method = (MethodCall) je;

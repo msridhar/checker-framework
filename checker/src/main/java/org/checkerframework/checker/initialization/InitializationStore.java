@@ -179,19 +179,20 @@ public class InitializationStore<V extends CFAbstractValue<V>, S extends Initial
     try {
       // Remove invariant annotated fields to avoid performance issue reported in #1438.
       for (FieldAccess invariantField : invariantFields.keySet()) {
-        V v = fieldValues.remove(invariantField);
+        V v = fieldValues.get(invariantField);
         removedFieldValues.put(invariantField, v);
       }
+      fieldValues = fieldValues.minusAll(invariantFields.keySet());
       for (FieldAccess invariantField : other.invariantFields.keySet()) {
-        V v = other.fieldValues.remove(invariantField);
+        V v = other.fieldValues.get(invariantField);
         removedOtherFieldValues.put(invariantField, v);
       }
-
+      other.fieldValues = other.fieldValues.minusAll(other.invariantFields.keySet());
       return super.supersetOf(other);
     } finally {
       // Restore removed values.
-      fieldValues.putAll(removedFieldValues);
-      other.fieldValues.putAll(removedOtherFieldValues);
+      fieldValues = fieldValues.plusAll(removedFieldValues);
+      other.fieldValues = other.fieldValues.plusAll(removedOtherFieldValues);
     }
   }
 
@@ -201,19 +202,20 @@ public class InitializationStore<V extends CFAbstractValue<V>, S extends Initial
     Map<FieldAccess, V> removedFieldValues = new HashMap<>(invariantFields.size());
     Map<FieldAccess, V> removedOtherFieldValues = new HashMap<>(other.invariantFields.size());
     for (FieldAccess invariantField : invariantFields.keySet()) {
-      V v = fieldValues.remove(invariantField);
+      V v = fieldValues.get(invariantField);
       removedFieldValues.put(invariantField, v);
     }
+    fieldValues = fieldValues.minusAll(invariantFields.keySet());
     for (FieldAccess invariantField : other.invariantFields.keySet()) {
-      V v = other.fieldValues.remove(invariantField);
+      V v = other.fieldValues.get(invariantField);
       removedOtherFieldValues.put(invariantField, v);
     }
-
+    other.fieldValues = other.fieldValues.minusAll(other.invariantFields.keySet());
     S result = super.leastUpperBound(other);
 
     // Restore removed values.
-    fieldValues.putAll(removedFieldValues);
-    other.fieldValues.putAll(removedOtherFieldValues);
+    fieldValues = fieldValues.plusAll(removedFieldValues);
+    other.fieldValues = other.fieldValues.plusAll(removedOtherFieldValues);
 
     // Set intersection for initializedFields.
     result.initializedFields.addAll(other.initializedFields);
@@ -229,7 +231,7 @@ public class InitializationStore<V extends CFAbstractValue<V>, S extends Initial
       }
     }
     // Add invariant annotation.
-    result.fieldValues.putAll(result.invariantFields);
+    result.fieldValues = result.fieldValues.plusAll(result.invariantFields);
 
     return result;
   }
