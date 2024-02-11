@@ -74,6 +74,26 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
   /** Information collected about the current object. */
   protected V thisValue;
 
+  @SuppressWarnings({"serial", "unused"})
+  static class DebuggingHashMapProxy<K, V> extends HashMap<K, V> {
+    @Override
+    public V put(K key, V value) {
+      // Debugging logic before the actual put operation
+      // System.out.println("Inserting key: " + key + " with value: " + value);
+      // You can set a conditional breakpoint here
+
+      // Perform the actual put operation
+      return super.put(key, value);
+    }
+
+    // Implement other Map methods, delegating to `delegate` and adding debugging as necessary
+
+    @Override
+    public void putAll(Map<? extends K, ? extends V> m) {
+      super.putAll(m);
+    }
+  }
+
   /** Information collected about fields, using the internal representation {@link FieldAccess}. */
   protected Map<FieldAccess, V> fieldValues;
 
@@ -637,7 +657,7 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
         V oldValue = fieldValues.get(fieldAcc);
         V newValue = merger.apply(oldValue, value);
         if (newValue != null) {
-          fieldValues.put(fieldAcc, newValue);
+          //          fieldValues.put(fieldAcc, newValue);
         }
       }
     } else if (expr instanceof MethodCall) {
@@ -883,7 +903,8 @@ public abstract class CFAbstractStore<V extends CFAbstractValue<V>, S extends CF
     if (je instanceof ArrayAccess) {
       updateForArrayAssignment((ArrayAccess) je, val);
     } else if (je instanceof FieldAccess) {
-      updateForFieldAccessAssignment((FieldAccess) je, val);
+      // TODO temporary hack for testing!
+      // updateForFieldAccessAssignment((FieldAccess) je, val);
     } else if (je instanceof LocalVariable) {
       updateForLocalVariableAssignment((LocalVariable) je, val);
     } else {
