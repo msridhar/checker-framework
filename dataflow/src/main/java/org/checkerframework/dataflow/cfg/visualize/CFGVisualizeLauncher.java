@@ -9,6 +9,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.Map;
 import javax.tools.JavaFileManager;
@@ -167,7 +168,7 @@ public final class CFGVisualizeLauncher {
    *
    * @param <V> the abstract value type to be tracked by the analysis
    * @param <S> the store type used in the analysis
-   * @param <T> the transfer function type that is used to approximated runtime behavior
+   * @param <T> the transfer function type that is used to approximate run-time behavior
    * @param inputFile a Java source file, used as input
    * @param outputDir source output directory
    * @param method name of the method to generate the CFG for
@@ -215,7 +216,6 @@ public final class CFGVisualizeLauncher {
    * @return control flow graph of the specified method
    */
   public static ControlFlowGraph generateMethodCFG(String file, String clas, String method) {
-
     CFGProcessor cfgProcessor = new CFGProcessor(clas, method);
 
     Context context = new Context();
@@ -223,9 +223,9 @@ public final class CFGVisualizeLauncher {
     JavaCompiler javac = new JavaCompiler(context);
 
     JavaFileObject l;
-    try (@SuppressWarnings(
-            "mustcall:type.arguments.not.inferred") // Context isn't annotated for the Must Call
-        // Checker.
+    try (@SuppressWarnings("mustcall:type.arguments.not.inferred" // Context isn't annotated for
+        // the Must Call Checker.
+        )
         JavacFileManager fileManager = (JavacFileManager) context.get(JavaFileManager.class)) {
       l = fileManager.getJavaFileObjectsFromStrings(List.of(file)).iterator().next();
     } catch (IOException e) {
@@ -282,11 +282,11 @@ public final class CFGVisualizeLauncher {
   public static void writeStringOfCFG(
       String inputFile, String method, String clas, String outputFile, Analysis<?, ?, ?> analysis) {
     Map<String, Object> res = generateStringOfCFG(inputFile, method, clas, true, analysis);
-    try (FileWriter out = new FileWriter(outputFile)) {
+    try (FileWriter out = new FileWriter(outputFile, StandardCharsets.UTF_8)) {
       if (res != null && res.get("stringGraph") != null) {
         out.write(res.get("stringGraph").toString());
       }
-      out.write("\n");
+      out.write(System.lineSeparator());
     } catch (IOException e) {
       e.printStackTrace();
     }
@@ -313,7 +313,7 @@ public final class CFGVisualizeLauncher {
    *
    * @param <V> the abstract value type to be tracked by the analysis
    * @param <S> the store type used in the analysis
-   * @param <T> the transfer function type that is used to approximated runtime behavior
+   * @param <T> the transfer function type that is used to approximate run-time behavior
    * @param inputFile a Java source file, used as input
    * @param method name of the method to generate the CFG for
    * @param clas name of the class which includes the method to generate the CFG for

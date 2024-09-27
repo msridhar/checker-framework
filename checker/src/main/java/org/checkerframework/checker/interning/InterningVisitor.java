@@ -58,7 +58,7 @@ import org.checkerframework.javacutil.TypesUtils;
  *
  * <ol>
  *   <li value="1">either argument to a "==" or "!=" comparison is not Interned (error
- *       "not.interned"). As a special case, the comparison is permitted if either arugment is
+ *       "not.interned"). As a special case, the comparison is permitted if either argument is
  *       InternedDistinct.
  *   <li value="2">the receiver and argument for a call to an equals method are both Interned
  *       (optional warning "unnecessary.equals")
@@ -224,7 +224,7 @@ public final class InterningVisitor extends BaseTypeVisitor<InterningAnnotatedTy
 
   // Ensure that method annotations are not written on methods they don't apply to.
   @Override
-  public Void visitMethod(MethodTree tree, Void p) {
+  public void processMethodTree(MethodTree tree) {
     ExecutableElement methElt = TreeUtils.elementFromDeclaration(tree);
     boolean hasCompareToMethodAnno =
         atypeFactory.getDeclAnnotation(methElt, CompareToMethod.class) != null;
@@ -243,7 +243,7 @@ public final class InterningVisitor extends BaseTypeVisitor<InterningAnnotatedTy
       checker.reportError(tree, "invalid.method.annotation", "@InternMethod", "0", methElt, params);
     }
 
-    return super.visitMethod(tree, p);
+    super.processMethodTree(tree);
   }
 
   /**

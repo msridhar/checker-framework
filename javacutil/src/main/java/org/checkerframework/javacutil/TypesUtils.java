@@ -59,14 +59,14 @@ public final class TypesUtils {
     throw new AssertionError("Class TypesUtils cannot be instantiated.");
   }
 
-  /// Creating types
+  // Creating types
 
   /**
    * Returns the {@link TypeMirror} for a given {@link Class}.
    *
    * @param clazz a class
    * @param types the type utilities
-   * @param elements the element utiliites
+   * @param elements the element utilities
    * @return the TypeMirror for {@code clazz}
    */
   public static TypeMirror typeFromClass(Class<?> clazz, Types types, Elements elements) {
@@ -102,7 +102,7 @@ public final class TypesUtils {
     return t.getArrayType(componentType);
   }
 
-  /// Creating a Class<?>
+  // Creating a Class<?>
 
   /**
    * Returns the {@link Class} for a given {@link TypeMirror}. Returns {@code Object.class} if it
@@ -157,7 +157,7 @@ public final class TypesUtils {
     }
   }
 
-  /// Getters
+  // Getters
 
   /**
    * Gets the fully qualified name for a provided type. It returns an empty name if type is an
@@ -268,7 +268,7 @@ public final class TypesUtils {
     return result;
   }
 
-  /// Equality
+  // Equality
 
   /**
    * Returns true iff the arguments are both the same declared types.
@@ -302,7 +302,7 @@ public final class TypesUtils {
     return (left.getKind() == right.getKind());
   }
 
-  /// Predicates
+  // Predicates
 
   /**
    * Checks if the type represents a java.lang.Object declared type.
@@ -374,7 +374,7 @@ public final class TypesUtils {
    *
    * @param type the type
    * @param qualifiedNames fully-qualified type names to check for
-   * @return type iff type represents a declared type whose fully-qualified name is one of the given
+   * @return true iff type represents a declared type whose fully-qualified name is one of the given
    *     names
    */
   public static boolean isDeclaredOfName(TypeMirror type, Collection<String> qualifiedNames) {
@@ -713,7 +713,7 @@ public final class TypesUtils {
     return e.getKind() != TypeKind.NONE;
   }
 
-  /// Type variables and wildcards
+  // Type variables and wildcards
 
   /**
    * If the argument is a bounded TypeVariable or WildcardType, return its non-variable,
@@ -808,6 +808,27 @@ public final class TypesUtils {
     Context context = ((JavacProcessingEnvironment) env).getContext();
     Symtab syms = Symtab.instance(context);
     return (DeclaredType) syms.objectType;
+  }
+
+  /**
+   * Returns the lower bound of {@code typeVariable}. If it does not have a lower bound, returns the
+   * null type.
+   *
+   * @param typeVariable a type variable
+   * @param env the proceProcessingEnvironment
+   * @return the lower bound of {@code typeVariable} or the null type
+   */
+  public static TypeMirror getTypeVariableLowerBound(
+      TypeVariable typeVariable, ProcessingEnvironment env) {
+    TypeMirror lb = typeVariable.getLowerBound();
+    if (lb != null) {
+      return lb;
+    }
+
+    // Use bottom type to ensure there is a lower bound.
+    Context context = ((JavacProcessingEnvironment) env).getContext();
+    Symtab syms = Symtab.instance(context);
+    return syms.botType;
   }
 
   /**
@@ -933,21 +954,6 @@ public final class TypesUtils {
    *
    * @param type a type mirror
    * @return true if {@code type} is a type variable created during capture conversion
-   * @deprecated use {@link #isCapturedTypeVariable(TypeMirror)} instead
-   */
-  @Deprecated // 2021-07-06
-  public static boolean isCaptured(TypeMirror type) {
-    if (type.getKind() != TypeKind.TYPEVAR) {
-      return false;
-    }
-    return ((Type.TypeVar) TypeAnnotationUtils.unannotatedType(type)).isCaptured();
-  }
-
-  /**
-   * Returns true if {@code type} is a type variable created during capture conversion.
-   *
-   * @param type a type mirror
-   * @return true if {@code type} is a type variable created during capture conversion
    */
   public static boolean isCapturedTypeVariable(TypeMirror type) {
     if (type.getKind() != TypeKind.TYPEVAR) {
@@ -971,7 +977,7 @@ public final class TypesUtils {
     return null;
   }
 
-  /// Least upper bound and greatest lower bound
+  // Least upper bound and greatest lower bound
 
   /**
    * Returns the least upper bound of two {@link TypeMirror}s, ignoring any annotations on the
@@ -1140,7 +1146,7 @@ public final class TypesUtils {
     return com.sun.tools.javac.util.List.from(typeList);
   }
 
-  /// Substitutions
+  // Substitutions
 
   /**
    * Returns the return type of a method, given the receiver of the method call.

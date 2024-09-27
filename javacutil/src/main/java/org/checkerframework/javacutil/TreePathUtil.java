@@ -31,9 +31,9 @@ public final class TreePathUtil {
     throw new BugInCF("Class TreeUtils cannot be instantiated.");
   }
 
-  ///
-  /// Retrieving a path (from another path)
-  ///
+  //
+  // Retrieving a path (from another path)
+  //
 
   /**
    * Gets path to the first (innermost) enclosing tree of the given kind. May return {@code path}
@@ -85,9 +85,9 @@ public final class TreePathUtil {
     return pathTillOfKind(path, Tree.Kind.METHOD);
   }
 
-  ///
-  /// Retrieving a tree (from a path)
-  ///
+  //
+  // Retrieving a tree (from a path)
+  //
 
   /**
    * Gets the first (innermost) enclosing tree in path, of the given kind. May return the leaf of
@@ -253,8 +253,8 @@ public final class TreePathUtil {
    */
   public static @Nullable Tree getContextForPolyExpression(TreePath treePath) {
     // If a lambda or a method reference is the expression in a type cast, then the type cast is
-    // the context.  If a method or constructor invocation is the expression in a type cast, then
-    // the invocation has no context.
+    // the context.  If a method or constructor invocation is the expression in a type cast,
+    // then the invocation has no context.
     boolean isLambdaOrMethodRef =
         treePath.getLeaf().getKind() == Kind.LAMBDA_EXPRESSION
             || treePath.getLeaf().getKind() == Kind.MEMBER_REFERENCE;
@@ -308,12 +308,13 @@ public final class TreePathUtil {
         // Otherwise use the context of the ConditionalExpressionTree.
         return getContextForPolyExpression(parentPath, isLambdaOrMethodRef);
       case PARENTHESIZED:
+      case CASE:
         return getContextForPolyExpression(parentPath, isLambdaOrMethodRef);
       default:
         if (TreeUtils.isYield(parent)) {
-          // A yield statement is only legal within a switch expression. Walk up the path to the
-          // case tree instead of the switch expression tree so the code remains backward
-          // compatible.
+          // A yield statement is only legal within a switch expression. Walk up the path
+          // to the case tree instead of the switch expression tree so the code remains
+          // backward compatible.
           TreePath pathToCase = pathTillOfKind(parentPath, Kind.CASE);
           assert pathToCase != null
               : "@AssumeAssertion(nullness): yield statements must be enclosed in a CaseTree";
@@ -324,7 +325,8 @@ public final class TreePathUtil {
           @SuppressWarnings("interning:not.interned") // AST node comparison
           boolean switchIsLeaf = SwitchExpressionUtils.getExpression(parent) == treePath.getLeaf();
           if (switchIsLeaf) {
-            // The assignment context for the switch selector expression is simply boolean.
+            // The assignment context for the switch selector expression is simply
+            // boolean.
             // No point in going on.
             return null;
           }
@@ -340,9 +342,9 @@ public final class TreePathUtil {
     }
   }
 
-  ///
-  /// Predicates
-  ///
+  //
+  // Predicates
+  //
 
   /**
    * Returns true if the tree is in a constructor or an initializer block.
@@ -432,9 +434,9 @@ public final class TreePathUtil {
     throw new BugInCF("path did not contain method or class: " + toString(origPath));
   }
 
-  ///
-  /// Formatting
-  ///
+  //
+  // Formatting
+  //
 
   /**
    * Return a printed representation of a TreePath.
@@ -465,5 +467,26 @@ public final class TreePathUtil {
       return "null";
     }
     return TreeUtils.toStringTruncated(path.getLeaf(), length);
+  }
+
+  /**
+   * Retrieves the nearest enclosing method or class element for the specified path in the AST. This
+   * utility method prioritizes method elements over class elements. It returns the element of the
+   * closest method scope if available; otherwise, it defaults to the enclosing class scope.
+   *
+   * @param path the {@link TreePath} to analyze for the nearest enclosing scope.
+   * @return the {@link Element} of the nearest enclosing method or class, or {@code null} if no
+   *     such enclosing element can be found.
+   */
+  public static @Nullable Element findNearestEnclosingElement(TreePath path) {
+    MethodTree enclosingMethodTree = TreePathUtil.enclosingMethod(path);
+    if (enclosingMethodTree != null) {
+      return TreeUtils.elementFromDeclaration(enclosingMethodTree);
+    }
+    ClassTree enclosingClassTree = TreePathUtil.enclosingClass(path);
+    if (enclosingClassTree != null) {
+      return TreeUtils.elementFromDeclaration(enclosingClassTree);
+    }
+    return null;
   }
 }

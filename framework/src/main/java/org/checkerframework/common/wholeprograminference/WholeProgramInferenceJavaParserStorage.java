@@ -36,13 +36,12 @@ import com.sun.source.tree.NewClassTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.tools.javac.code.Symbol.ClassSymbol;
 import com.sun.tools.javac.code.Symbol.VarSymbol;
-import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileNotFoundException;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.io.Writer;
 import java.lang.annotation.Annotation;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -75,6 +74,7 @@ import org.checkerframework.checker.signature.qual.BinaryName;
 import org.checkerframework.common.basetype.BaseTypeChecker;
 import org.checkerframework.common.wholeprograminference.WholeProgramInference.OutputFormat;
 import org.checkerframework.dataflow.analysis.Analysis;
+import org.checkerframework.dataflow.qual.Pure;
 import org.checkerframework.framework.ajava.AnnotationMirrorToAnnotationExprConversion;
 import org.checkerframework.framework.ajava.AnnotationTransferVisitor;
 import org.checkerframework.framework.ajava.DefaultJointVisitor;
@@ -164,6 +164,7 @@ public class WholeProgramInferenceJavaParserStorage
    * @param qual an annotation class
    * @return true iff {@code qual} is meta-annotated with {@link InvisibleQualifier}
    */
+  @Pure
   public static boolean isInvisible(Class<? extends Annotation> qual) {
     return Arrays.stream(qual.getAnnotations())
         .anyMatch(anno -> anno.annotationType() == InvisibleQualifier.class);
@@ -241,9 +242,9 @@ public class WholeProgramInferenceJavaParserStorage
     }
   }
 
-  ///
-  /// Reading stored annotations
-  ///
+  //
+  // Reading stored annotations
+  //
 
   @Override
   public boolean hasStorageLocationForMethod(ExecutableElement methodElt) {
@@ -577,9 +578,9 @@ public class WholeProgramInferenceJavaParserStorage
     }
   }
 
-  ///
-  /// Reading in files
-  ///
+  //
+  // Reading in files
+  //
 
   @Override
   public void preprocessClassTree(ClassTree classTree) {
@@ -708,7 +709,8 @@ public class WholeProgramInferenceJavaParserStorage
 
           @Override
           public void processClass(ClassTree javacTree, AnnotationDeclaration javaParserNode) {
-            // TODO: consider supporting inferring annotations on annotation declarations.
+            // TODO: consider supporting inferring annotations on annotation
+            // declarations.
             // addClass(javacTree, javaParserNode);
           }
 
@@ -734,26 +736,25 @@ public class WholeProgramInferenceJavaParserStorage
            */
           private void addClass(ClassTree tree, @Nullable TypeDeclaration<?> javaParserNode) {
             String className;
-            // elementFromDeclaration returns null instead of crashing when no element exists for
-            // the class tree, which can happen for certain kinds of anonymous classes, such as
-            // classes, such as Ordering$1 in PolyCollectorTypeVar.java in the all-systems test
-            // suite.
             TypeElement classElt = TreeUtils.elementFromDeclaration(tree);
             if (classElt == null) {
-              // If such an element does not exist, compute the name of the class, instead. This
-              // method of computing the name is not 100% guaranteed to be reliable, but it should
-              // be sufficient for WPI's purposes here: if the wrong name is computed, the worst
-              // outcome is a false positive because WPI inferred an untrue annotation.
+              // If such an element does not exist, compute the name of the class
+              // instead. This method of computing the name is not 100% guaranteed to
+              // be reliable, but it should be sufficient for WPI's purposes here: if
+              // the wrong name is computed, the worst outcome is a false positive
+              // because WPI inferred an untrue annotation.
               Optional<String> ofqn = javaParserClass.getFullyQualifiedName();
               if (!ofqn.isPresent()) {
                 throw new BugInCF("Missing getFullyQualifiedName() for " + javaParserClass);
               }
               if ("".contentEquals(tree.getSimpleName())) {
-                @SuppressWarnings("signature:assignment") // computed from string concatenation
+                @SuppressWarnings("signature:assignment" // computed from string concatenation
+                )
                 @BinaryName String computedName = ofqn.get() + "$" + ++innerClassCount;
                 className = computedName;
               } else {
-                @SuppressWarnings("signature:assignment") // computed from string concatenation
+                @SuppressWarnings("signature:assignment" // computed from string concatenation
+                )
                 @BinaryName String computedName = ofqn.get() + "$" + tree.getSimpleName().toString();
                 className = computedName;
               }
@@ -830,13 +831,15 @@ public class WholeProgramInferenceJavaParserStorage
 
             // Ensure that if an enum constant defines a class, that class gets
             // registered properly.  See
-            // e.g. https://docs.oracle.com/javase/specs/jls/se17/html/jls-8.html#jls-8.9.1
+            // e.g.
+            // https://docs.oracle.com/javase/specs/jls/se17/html/jls-8.html#jls-8.9.1
             // for the specification of an enum constant, which does permit it to
             // define an anonymous class.
             NewClassTree constructor = (NewClassTree) javacTree.getInitializer();
             ClassTree constructorClassBody = constructor.getClassBody();
             if (constructorClassBody != null) {
-              // addClass assumes there is an element for its argument, but that is not always true!
+              // addClass assumes there is an element for its argument, but that is
+              // not always true!
               if (TreeUtils.elementFromDeclaration(constructorClassBody) != null) {
                 addClass(constructorClassBody, null);
               }
@@ -905,9 +908,9 @@ public class WholeProgramInferenceJavaParserStorage
     return path;
   }
 
-  ///
-  /// Writing to a file
-  ///
+  //
+  // Writing to a file
+  //
 
   // The prepare*ForWriting hooks are needed in addition to the postProcessClassTree hook because
   // a scene may be modifed and written at any time, including before or after
@@ -994,8 +997,8 @@ public class WholeProgramInferenceJavaParserStorage
   // TODO:  Inferred annotations must be consistent both with one another and with
   // programmer-written annotations.  The latter are stored in elements and, with the given formal
   // parameter list, are not accessible to this method.  In the future, the annotations stored in
-  // elements should also be passed to this method (or maybe they are already available to the type
-  // factory?).  I'm leaving that enhancement until later.
+  // elements should also be passed to this method (or maybe they are already available to the
+  // type factory?).  I'm leaving that enhancement until later.
   public void wpiPrepareMethodForWriting(
       CallableDeclarationAnnos methodAnnos,
       Collection<CallableDeclarationAnnos> inSupertypes,
@@ -1017,8 +1020,8 @@ public class WholeProgramInferenceJavaParserStorage
     setSupertypesAndSubtypesModified();
 
     for (String path : modifiedFiles) {
-      // This calls deepCopy() because wpiPrepareCompilationUnitForWriting performs side effects
-      // that we don't want to be persistent.
+      // This calls deepCopy() because wpiPrepareCompilationUnitForWriting performs side
+      // effects that we don't want to be persistent.
       CompilationUnitAnnos root = sourceToAnnos.get(path).deepCopy();
       wpiPrepareCompilationUnitForWriting(root);
       File packageDir;
@@ -1067,12 +1070,12 @@ public class WholeProgramInferenceJavaParserStorage
    * @param root the compilation unit to be written
    */
   private void writeAjavaFile(File outputPath, CompilationUnitAnnos root) {
-    try (Writer writer = new BufferedWriter(new FileWriter(outputPath))) {
+    try (Writer writer = Files.newBufferedWriter(outputPath.toPath(), StandardCharsets.UTF_8)) {
 
-      // This implementation uses JavaParser's lexical preserving printing, which writes the file
-      // such that its formatting is close to the original source file it was parsed from as
-      // possible. It is commented out because, this feature is very buggy and crashes when adding
-      // annotations in certain locations.
+      // This implementation uses JavaParser's lexical preserving printing, which writes the
+      // file such that its formatting is close to the original source file it was parsed from
+      // as possible. It is commented out because, this feature is very buggy and crashes when
+      // adding annotations in certain locations.
       // LexicalPreservingPrinter.print(root.declaration, writer);
 
       // Do not print invisible qualifiers, to avoid cluttering the output.
@@ -1171,9 +1174,9 @@ public class WholeProgramInferenceJavaParserStorage
     target.accept(new AnnotationTransferVisitor(), annotatedType);
   }
 
-  ///
-  /// Storing annotations
-  ///
+  //
+  // Storing annotations
+  //
 
   /**
    * Stores the JavaParser node for a compilation unit and the list of wrappers for the classes and
@@ -1354,9 +1357,9 @@ public class WholeProgramInferenceJavaParserStorage
     public String toString() {
       String fieldsString = fields.toString();
       if (fieldsString.length() > 100) {
-        // The quoting increases the likelihood that all delimiters are balanced in the result.
-        // That makes it easier to manipulate the result (such as skipping over it) in an
-        // editor.  The quoting also makes clear that the value is truncated.
+        // The quoting increases the likelihood that all delimiters are balanced in the
+        // result.  That makes it easier to manipulate the result (such as skipping over it)
+        // in an editor.  The quoting also makes clear that the value is truncated.
         fieldsString = "\"" + fieldsString.substring(0, 95) + "...\"";
       }
 

@@ -101,6 +101,7 @@ import org.checkerframework.framework.ajava.JointVisitorWithDefaultAction;
 import org.checkerframework.framework.flow.CFAbstractStore;
 import org.checkerframework.framework.flow.CFAbstractValue;
 import org.checkerframework.framework.qual.DefaultQualifier;
+import org.checkerframework.framework.qual.HasQualifierParameter;
 import org.checkerframework.framework.qual.Unused;
 import org.checkerframework.framework.source.DiagMessage;
 import org.checkerframework.framework.source.SourceVisitor;
@@ -257,10 +258,10 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
   /** True if "-AajavaChecks" was passed on the command line. */
   private final boolean ajavaChecks;
 
-  /** True if "-AassumeSideEffectFree" or "-aassumePure" was passed on the command line. */
+  /** True if "-AassumeSideEffectFree" or "-AassumePure" was passed on the command line. */
   private final boolean assumeSideEffectFree;
 
-  /** True if "-AassumeDeterministic" or "-aassumePure" was passed on the command line. */
+  /** True if "-AassumeDeterministic" or "-AassumePure" was passed on the command line. */
   private final boolean assumeDeterministic;
 
   /** True if "-AassumePureGetters" was passed on the command line. */
@@ -486,12 +487,9 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
 
     String withAnnotations;
     try (InputStream annotationInputStream = root.getSourceFile().openInputStream()) {
-      // This check only runs on files from the Checker Framework test suite, which should all
-      // use UNIX line separators. Using System.lineSeparator instead of "\n" could cause the
-      // test to fail on Mac or Windows.
       withAnnotations =
           new InsertAjavaAnnotations(elements)
-              .insertAnnotations(annotationInputStream, withoutAnnotations, "\n");
+              .insertAnnotations(annotationInputStream, withoutAnnotations, System.lineSeparator());
     } catch (IOException e) {
       throw new BugInCF("Error while reading Java file: " + root.getSourceFile().toUri(), e);
     }
@@ -500,7 +498,7 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
     try {
       modifiedAst = JavaParserUtil.parseCompilationUnit(withAnnotations);
     } catch (ParseProblemException e) {
-      throw new BugInCF("Failed to parse code after annotation insertion:\n" + withAnnotations, e);
+      throw new BugInCF("Failed to parse code after annotation insertion: " + withAnnotations, e);
     }
 
     AnnotationEqualityVisitor visitor = new AnnotationEqualityVisitor();
@@ -542,7 +540,7 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
    */
   @Override
   public final Void visitClass(ClassTree classTree, Void p) {
-    if (checker.shouldSkipDefs(classTree) || checker.shouldSkipDirs(classTree)) {
+    if (checker.shouldSkipDefs(classTree) || checker.shouldSkipFiles(classTree)) {
       // Not "return super.visitClass(classTree, p);" because that would recursively call
       // visitors on subtrees; we want to skip the class entirely.
       return null;
@@ -605,7 +603,7 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
       }
     }
 
-    checkForPolymorphicQualifiers(classTree);
+    warnInvalidPolymorphicQualifier(classTree);
 
     checkExtendsAndImplements(classTree);
 
@@ -638,7 +636,7 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
    *
    * @param classTree the class to check
    */
-  protected void checkForPolymorphicQualifiers(ClassTree classTree) {
+  protected void warnInvalidPolymorphicQualifier(ClassTree classTree) {
     if (TypesUtils.isAnonymous(TreeUtils.typeOf(classTree))) {
       // Anonymous class can have polymorphic annotations, so don't check them.
       return;
@@ -661,7 +659,7 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
    *
    * @param typeParameterTrees the type parameters to check
    */
-  protected void checkForPolymorphicQualifiers(
+  protected void warnInvalidPolymorphicQualifier(
       List<? extends TypeParameterTree> typeParameterTrees) {
     for (Tree tree : typeParameterTrees) {
       tree.accept(polyTreeScanner, "in a type parameter");
@@ -680,7 +678,7 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
    */
   protected void checkQualifierParameter(ClassTree classTree) {
     // Set of polymorphic qualifiers for hierarchies that do not have a qualifier parameter and
-    // therefor cannot appear on a field.
+    // therefore cannot appear on a field.
     AnnotationMirrorSet illegalOnFieldsPolyQual = new AnnotationMirrorSet();
     // Set of polymorphic annotations for all hierarchies
     AnnotationMirrorSet polys = new AnnotationMirrorSet();
@@ -694,6 +692,14 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
       // If there is no polymorphic qualifier in the hierarchy, it could still have a
       // @HasQualifierParameter that must be checked.
       // }
+
+      if (!atypeFactory.hasExplicitQualifierParameterInHierarchy(classElement, top)
+          && atypeFactory.getDeclAnnotation(classElement, HasQualifierParameter.class) != null) {
+        // The argument to a @HasQualifierParameter annotation must be the top type in the
+        // type system.
+        checker.reportError(classTree, "invalid.qual.param", top);
+        break;
+      }
 
       if (atypeFactory.hasExplicitQualifierParameterInHierarchy(classElement, top)
           && atypeFactory.hasExplicitNoQualifierParameterInHierarchy(classElement, top)) {
@@ -724,15 +730,15 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
     for (Tree mem : classTree.getMembers()) {
       if (mem.getKind() == Tree.Kind.VARIABLE) {
         AnnotatedTypeMirror fieldType = atypeFactory.getAnnotatedType(mem);
-        List<DiagMessage> hasIllegalPoly;
+        List<DiagMessage> hasInvalidPoly;
         if (ElementUtils.isStatic(TreeUtils.elementFromDeclaration((VariableTree) mem))) {
           // A polymorphic qualifier is not allowed on a static field even if the class
           // has a qualifier parameter.
-          hasIllegalPoly = polyScanner.visit(fieldType, polys);
+          hasInvalidPoly = hasInvalidPolyScanner.visit(fieldType, polys);
         } else {
-          hasIllegalPoly = polyScanner.visit(fieldType, illegalOnFieldsPolyQual);
+          hasInvalidPoly = hasInvalidPolyScanner.visit(fieldType, illegalOnFieldsPolyQual);
         }
-        for (DiagMessage dm : hasIllegalPoly) {
+        for (DiagMessage dm : hasInvalidPoly) {
           checker.report(mem, dm);
         }
       }
@@ -743,17 +749,17 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
    * A scanner that given a set of polymorphic qualifiers, returns a list of errors reporting a use
    * of one of the polymorphic qualifiers.
    */
-  private final PolyTypeScanner polyScanner = new PolyTypeScanner();
+  private final HasInvalidPolyScanner hasInvalidPolyScanner = new HasInvalidPolyScanner();
 
   /**
    * A scanner that given a set of polymorphic qualifiers, returns a list of errors reporting a use
    * of one of the polymorphic qualifiers.
    */
-  static class PolyTypeScanner
+  static class HasInvalidPolyScanner
       extends SimpleAnnotatedTypeScanner<List<DiagMessage>, AnnotationMirrorSet> {
 
-    /** Create PolyTypeScanner. */
-    private PolyTypeScanner() {
+    /** Create HasInvalidPolyScanner. */
+    private HasInvalidPolyScanner() {
       super(DiagMessage::mergeLists, Collections.emptyList());
     }
 
@@ -793,8 +799,8 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
 
     TypeMirror classType = TreeUtils.typeOf(classTree);
     AnnotationMirrorSet classBounds = atypeFactory.getTypeDeclarationBounds(classType);
-    // No explicitly-written extends clause, as in "class X {}", is equivalent to writing "class X
-    // extends @Top Object {}", so there is no need to do any subtype checking.
+    // No explicitly-written extends clause, as in "class X {}", is equivalent to writing "class
+    // X extends @Top Object {}", so there is no need to do any subtype checking.
     if (classTree.getExtendsClause() != null) {
       Tree superClause = classTree.getExtendsClause();
       checkExtendsOrImplements(superClause, classBounds, classType, true);
@@ -949,7 +955,23 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
    * Also, it issues a "missing.this" error for static method annotated receivers.
    */
   @Override
-  public Void visitMethod(MethodTree tree, Void p) {
+  public final Void visitMethod(MethodTree tree, Void p) {
+    ClassTree enclosingClass = TreePathUtil.enclosingClass(getCurrentPath());
+    if (checker.shouldSkipDefs(enclosingClass, tree)) {
+      return null;
+    }
+    processMethodTree(tree);
+    return null;
+  }
+
+  /**
+   * Type-check {@literal methodTree}. Subclasses should override this method instead of {@link
+   * #visitMethod(MethodTree, Void)}.
+   *
+   * @param tree the method to type-check
+   */
+  public void processMethodTree(MethodTree tree) {
+
     // We copy the result from getAnnotatedType to ensure that circular types (e.g. K extends
     // Comparable<K>) are represented by circular AnnotatedTypeMirrors, which avoids problems
     // with later checks.
@@ -974,7 +996,7 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
     try {
       if (TreeUtils.isAnonymousConstructor(tree)) {
         // We shouldn't dig deeper
-        return null;
+        return;
       }
 
       if (TreeUtils.isConstructor(tree)) {
@@ -1040,9 +1062,9 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
         }
       }
 
-      checkForPolymorphicQualifiers(tree.getTypeParameters());
+      warnInvalidPolymorphicQualifier(tree.getTypeParameters());
 
-      return super.visitMethod(tree, p);
+      super.visitMethod(tree, null);
     } finally {
       methodTree = preMT;
     }
@@ -1076,6 +1098,10 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
     if (!suggestPureMethods && !PurityUtils.hasPurityAnnotation(atypeFactory, tree)) {
       // There is nothing to check.
       return;
+    }
+
+    if (isExplicitlySideEffectFreeAndDeterministic(tree)) {
+      checker.reportWarning(tree, "purity.effectively.pure", tree.getName());
     }
 
     // `body` is lazily assigned.
@@ -1125,12 +1151,12 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
           WholeProgramInference wpi = atypeFactory.getWholeProgramInference();
           ExecutableElement methodElt = TreeUtils.elementFromDeclaration(tree);
           inferPurityAnno(additionalKinds, wpi, methodElt);
-          // The purity of overridden methods is impacted by the purity of this method. If a
-          // superclass method is pure, but an implementation in a subclass is not, WPI ought to
-          // treat  **neither** as pure. The purity kind of the superclass method is the LUB of
-          // its own purity and the purity of all the methods that override it. Logically, this
-          // rule is the same as the WPI rule for overrides, but purity isn't a type system and
-          // therefore must be special-cased.
+          // The purity of overridden methods is impacted by the purity of this method. If
+          // a superclass method is pure, but an implementation in a subclass is not, WPI
+          // ought to treat **neither** as pure. The purity kind of the superclass method
+          // is the LUB of its own purity and the purity of all the methods that override
+          // it. Logically, this rule is the same as the WPI rule for overrides, but
+          // purity isn't a type system and therefore must be special-cased.
           Set<? extends ExecutableElement> overriddenMethods =
               ElementUtils.getOverriddenMethods(methodElt, types);
           for (ExecutableElement overriddenElt : overriddenMethods) {
@@ -1158,6 +1184,21 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
       bodyAssigned = true;
     }
     // ...
+  }
+
+  /**
+   * Returns true if the given method is explicitly annotated with both @{@link SideEffectFree}
+   * and @{@link Deterministic}. Those annotations can be replaced by @{@link Pure}.
+   *
+   * @param tree a method
+   * @return true if a method is explicitly annotated with both @{@link SideEffectFree} and @{@link
+   *     Deterministic}
+   */
+  private boolean isExplicitlySideEffectFreeAndDeterministic(MethodTree tree) {
+    List<AnnotationMirror> annotationMirrors =
+        TreeUtils.annotationsFromTypeAnnotationTrees(tree.getModifiers().getAnnotations());
+    return AnnotationUtils.containsSame(annotationMirrors, SIDE_EFFECT_FREE)
+        && AnnotationUtils.containsSame(annotationMirrors, DETERMINISTIC);
   }
 
   /**
@@ -1807,7 +1848,7 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
         methodName,
         invokedMethod.getTypeVariables());
     List<AnnotatedTypeMirror> params =
-        AnnotatedTypes.adaptParameters(atypeFactory, invokedMethod, tree.getArguments());
+        AnnotatedTypes.adaptParameters(atypeFactory, invokedMethod, tree.getArguments(), tree);
     checkArguments(params, tree.getArguments(), methodName, method.getParameters());
     checkVarargs(invokedMethod, tree);
 
@@ -1851,6 +1892,14 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
         atypeFactory.getTypeArgumentInference().inferTypeArgs(atypeFactory, tree, methodType);
     if (args != null && !args.inferenceFailed()) {
       return true;
+    }
+    if (args.inferenceCrashed()) {
+      checker.reportError(
+          tree,
+          "type.argument.inference.crashed",
+          ElementUtils.getSimpleDescription(methodType.getElement()),
+          args == null ? "" : args.getErrorMsg());
+      return false;
     }
     checker.reportError(
         tree,
@@ -1924,7 +1973,7 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
    * @param tree method or constructor invocation tree
    */
   protected void checkVarargs(AnnotatedExecutableType invokedMethod, Tree tree) {
-    if (!TreeUtils.isVarArgs(tree)) {
+    if (!TreeUtils.isVarargsCall(tree)) {
       // If not a varargs invocation, type checking is already done in checkArguments.
       return;
     }
@@ -1997,7 +2046,8 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
         inferredAnno = qualHierarchy.findAnnotationInSameHierarchy(annos, anno);
       } else {
         // If the expression is "this", then get the type of the method receiver.
-        // TODO: There are other expressions that can be converted to trees, "#1" for example.
+        // TODO: There are other expressions that can be converted to trees, "#1" for
+        // example.
         if (expressionString.equals("this")) {
           AnnotatedTypeMirror atype = atypeFactory.getReceiverType(tree);
           if (atype != null) {
@@ -2129,7 +2179,7 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
 
     List<? extends ExpressionTree> passedArguments = tree.getArguments();
     List<AnnotatedTypeMirror> params =
-        AnnotatedTypes.adaptParameters(atypeFactory, constructorType, passedArguments);
+        AnnotatedTypes.adaptParameters(atypeFactory, constructorType, passedArguments, tree);
 
     ExecutableElement constructor = constructorType.getElement();
     CharSequence constructorName = ElementUtils.getSimpleDescription(constructor);
@@ -2316,22 +2366,20 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
     return null;
   }
 
-  /**
-   * If the computation of the type of the ConditionalExpressionTree in
-   * org.checkerframework.framework.type.TypeFromTree.TypeFromExpression.visitConditionalExpression(ConditionalExpressionTree,
-   * AnnotatedTypeFactory) is correct, the following checks are redundant. However, let's add
-   * another failsafe guard and do the checks.
-   */
   @Override
   public Void visitConditionalExpression(ConditionalExpressionTree tree, Void p) {
     if (TreeUtils.isPolyExpression(tree)) {
       // From the JLS:
-      // A poly reference conditional expression is compatible with a target type T if its second
-      // and third operand expressions are compatible with T.  In the Checker Framework this check
-      // happens in #commonAssignmentCheck.
+      // A poly reference conditional expression is compatible with a target type T if its
+      // second and third operand expressions are compatible with T.  In the Checker
+      // Framework this check happens in #commonAssignmentCheck.
       return super.visitConditionalExpression(tree, p);
     }
 
+    // If the computation of the type of the ConditionalExpressionTree in
+    // org.checkerframework.framework.type.TypeFromTree.TypeFromExpression.visitConditionalExpression(ConditionalExpressionTree,
+    // AnnotatedTypeFactory) is correct, the following checks are redundant. However, let's add
+    // another failsafe guard and do the checks.
     AnnotatedTypeMirror cond = atypeFactory.getAnnotatedType(tree);
     this.commonAssignmentCheck(cond, tree.getTrueExpression(), "conditional");
     this.commonAssignmentCheck(cond, tree.getFalseExpression(), "conditional");
@@ -2473,8 +2521,8 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
       reported = true; // don't issue cast unsafe warning.
     }
 
-    // Don't call TypeHierarchy#isSubtype(exprType, castType) because the underlying Java types will
-    // not be in the correct subtyping relationship if this is a downcast.
+    // Don't call TypeHierarchy#isSubtype(exprType, castType) because the underlying Java types
+    // will not be in the correct subtyping relationship if this is a downcast.
     if (!reported && !isTypeCastSafe(castType, exprType)) {
       checker.reportWarning(
           typeCastTree, "cast.unsafe", exprType.toString(true), castType.toString(true));
@@ -3612,19 +3660,22 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
       List<? extends ExpressionTree> passedArgs,
       CharSequence executableName,
       List<?> paramNames) {
-    int size = requiredTypes.size();
-    assert size == passedArgs.size()
-        : "size mismatch between required args ("
-            + requiredTypes
-            + ") and passed args ("
-            + passedArgs
-            + ")";
+    int numRequired = requiredTypes.size();
+    assert numRequired == passedArgs.size()
+        : String.format(
+            "numRequired %d should equal %d in checkArguments(%s, %s, %s, %s)",
+            numRequired,
+            passedArgs.size(),
+            listToString(requiredTypes),
+            listToString(passedArgs),
+            executableName,
+            listToString(paramNames));
     int maxParamNamesIndex = paramNames.size() - 1;
     // Rather weak assertion, due to how varargs parameters are treated.
-    assert size >= maxParamNamesIndex
+    assert numRequired >= maxParamNamesIndex
         : String.format(
             "mismatched lengths %d %d %d checkArguments(%s, %s, %s, %s)",
-            size,
+            numRequired,
             passedArgs.size(),
             paramNames.size(),
             listToString(requiredTypes),
@@ -3632,7 +3683,7 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
             executableName,
             listToString(paramNames));
 
-    for (int i = 0; i < size; ++i) {
+    for (int i = 0; i < numRequired; ++i) {
       AnnotatedTypeMirror requiredType = requiredTypes.get(i);
       ExpressionTree passedArg = passedArgs.get(i);
       Object paramName = paramNames.get(Math.min(i, maxParamNamesIndex));
@@ -3892,8 +3943,8 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
               functionTypeReturnType);
       return overrideChecker.checkOverride();
     } else {
-      // If the functionalInterface is not a declared type, it must be from a wildcard from a raw
-      // type. In that case, only return false if raw types should not be ignored.
+      // If the functionalInterface is not a declared type, it must be from a wildcard from a
+      // raw type. In that case, only return false if raw types should not be ignored.
       return !atypeFactory.ignoreRawTypeArguments;
     }
   }
@@ -4239,9 +4290,9 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
           overriddenParams.remove(0);
         }
         // Deal with varargs
-        if (overrider.isVarArgs() && !overridden.isVarArgs()) {
+        if (overrider.isVarargs() && !overridden.isVarargs()) {
           overriderParams =
-              AnnotatedTypes.expandVarArgsParametersFromTypes(overrider, overriddenParams);
+              AnnotatedTypes.expandVarargsParametersFromTypes(overrider, overriddenParams);
         }
       }
 
@@ -4610,7 +4661,7 @@ public class BaseTypeVisitor<Factory extends GenericAnnotatedTypeFactory<?, ?, ?
   }
 
   /**
-   * Issues an error if access not allowed, based on an @Unused annotation.
+   * Issues an error if access is not allowed, based on an {@code @Unused} annotation.
    *
    * @param identifierTree the identifier being accessed; the method does nothing if it is not a
    *     field

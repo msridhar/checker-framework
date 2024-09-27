@@ -555,7 +555,7 @@ public class AnnotationFileParser {
               // Find compile time constant fields, or values of an enum
               putAllNew(result, annosInType(element));
               importedConstants.addAll(getImportableMembers(element));
-              addEnclosingTypesToImportedTypes(element);
+              addEnclosedTypesToImportedTypes(element);
             }
 
           } else {
@@ -563,7 +563,7 @@ public class AnnotationFileParser {
             PackageElement element = findPackage(imported, importDecl);
             if (element != null) {
               putAllNew(result, annosInPackage(element));
-              addEnclosingTypesToImportedTypes(element);
+              addEnclosedTypesToImportedTypes(element);
             }
           }
         } else {
@@ -626,10 +626,14 @@ public class AnnotationFileParser {
     return result;
   }
 
-  // If a member is imported, then consider every containing class to also be imported.
-  private void addEnclosingTypesToImportedTypes(Element element) {
+  /**
+   * Handle wildcard imports by adding, to {@link #importedTypes}, every enclosed type.
+   *
+   * @param element an element for a type or package
+   */
+  private void addEnclosedTypesToImportedTypes(Element element) {
     for (Element enclosedEle : element.getEnclosedElements()) {
-      if (enclosedEle.getKind().isClass()) {
+      if (enclosedEle.getKind().isClass() || enclosedEle.getKind().isInterface()) {
         importedTypes.put(enclosedEle.getSimpleName().toString(), (TypeElement) enclosedEle);
       }
     }
@@ -906,8 +910,8 @@ public class AnnotationFileParser {
    * removed after processing the type's members. Otherwise, this method removes them.
    *
    * @param typeDecl the type declaration to process
-   * @param outerTypeName the name of the containing class, when processing a nested class;
-   *     otherwise null
+   * @param outerTypeName the name of the enclosing class, when processing a nested class; otherwise
+   *     null
    * @param classTree the tree corresponding to typeDecl if processing an ajava file, null otherwise
    * @return a list of types variables for {@code typeDecl}. Only non-null if processing an ajava
    *     file, in which case the contents should be removed from {@link #typeParameters} after
@@ -981,7 +985,8 @@ public class AnnotationFileParser {
       typeDeclTypeParameters = processType(typeDecl, typeElt);
       typeParameters.addAll(typeDeclTypeParameters);
     } else if (typeDecl instanceof ClassOrInterfaceDeclaration) {
-      // TODO: This test is never satisfied, because it is the opposite of that on the line above.
+      // TODO: This test is never satisfied, because it is the opposite of that on the line
+      // above.
       if (!(typeDecl instanceof ClassOrInterfaceDeclaration)) {
         warn(
             typeDecl,
@@ -1395,7 +1400,7 @@ public class AnnotationFileParser {
             param.getType(),
             param.getAnnotations(),
             param);
-        // The "VarArgsAnnotations" are those just before "...".
+        // The "VarargsAnnotations" are those just before "...".
         annotate(paramType, param.getVarArgsAnnotations(), param);
       } else {
         annotate(paramType, param.getType(), param.getAnnotations(), param);
@@ -1818,8 +1823,8 @@ public class AnnotationFileParser {
       } else if (param.getTypeBound() != null && !param.getTypeBound().isEmpty()) {
         annotate(paramType.getLowerBound(), param.getAnnotations(), param);
         if (param.getTypeBound().size() == 1) {
-          // The additional declAnnos (third argument) is always null in this call to `annotate`,
-          // but the type bound (second argument) might have annotations.
+          // The additional declAnnos (third argument) is always null in this call to
+          // `annotate`, but the type bound (second argument) might have annotations.
           annotate(paramType.getUpperBound(), param.getTypeBound().get(0), null, param);
         } else {
           // param.getTypeBound().size() > 1
@@ -1837,13 +1842,14 @@ public class AnnotationFileParser {
             annotate(paramType.getUpperBound(), typeBoundsWithAnotations.get(0), null, param);
           } else {
             // TODO: add support for intersection types
-            // One problem is that `annotate()` removes any existing annotations from the same
-            // qualifier hierarchies, so paramType.getLowerBound() would end up with the annotations
-            // of only the last type bound.
+            // One problem is that `annotate()` removes any existing annotations from
+            // the same qualifier hierarchies, so paramType.getLowerBound() would end up
+            // with the annotations of only the last type bound.
 
             // String msg =
             //     String.format(
-            //         "annotateTypeParameters: multiple type bounds:  typeParameters=%s;  "
+            //         "annotateTypeParameters: multiple type bounds:
+            // typeParameters=%s;  "
             //             + "param #%d=%s;  bounds=%s;  decl=%s;  elt=%s (%s).",
             //         typeParameters,
             //         i,
@@ -2881,9 +2887,9 @@ public class AnnotationFileParser {
     return res;
   }
 
-  ///////////////////////////////////////////////////////////////////////////
-  /// Map utilities
-  ///
+  // ///////////////////////////////////////////////////////////////////////////
+  // Map utilities
+  //
 
   /**
    * Just like Map.put, but does not override any existing value in the map.
@@ -2975,9 +2981,9 @@ public class AnnotationFileParser {
     }
   }
 
-  ///////////////////////////////////////////////////////////////////////////
-  /// Issue warnings
-  ///
+  // ///////////////////////////////////////////////////////////////////////////
+  // Issue warnings
+  //
 
   /** The warnings that have been issued so far. */
   private static final Set<String> warnings = new HashSet<>();
@@ -3193,9 +3199,9 @@ public class AnnotationFileParser {
     }
   }
 
-  ///////////////////////////////////////////////////////////////////////////
-  /// Parse state
-  ///
+  // ///////////////////////////////////////////////////////////////////////////
+  // Parse state
+  //
 
   /** Represents a class: its package name and name (including outer class names if any). */
   private static class FqName {

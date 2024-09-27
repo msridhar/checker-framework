@@ -226,8 +226,8 @@ public class WholeProgramInferenceImplementation<T> implements WholeProgramInfer
     // Don't infer formal parameter types from recursive calls.
     //
     // When performing WPI on a library, if there are no external calls (only recursive calls),
-    // then each iteration of WPI would make the formal parameter types more restrictive, leading
-    // to an infinite (or very long) loop.
+    // then each iteration of WPI would make the formal parameter types more restrictive,
+    // leading to an infinite (or very long) loop.
     //
     // Consider
     //   void myMethod(int x) { ... myMethod(x-1) ... }`
@@ -318,16 +318,16 @@ public class WholeProgramInferenceImplementation<T> implements WholeProgramInfer
       VariableElement ve;
       boolean varargsParam = i >= methodElt.getParameters().size() - 1 && methodElt.isVarArgs();
       if (varargsParam && this.atypeFactory.wpiOutputFormat == OutputFormat.JAIF) {
-        // The AFU's org.checkerframework.afu.annotator.Main produces a non-compilable source
-        // file when JAIF-based WPI tries to output an annotated varargs parameter, such as
-        // when running the test
-        // checker/tests/ainfer-testchecker/non-annotated/AnonymousAndInnerClass.java.  Until
-        // that bug is fixed, do not attempt to infer information about varargs parameters in
-        // JAIF mode.
+        // The AFU's org.checkerframework.afu.annotator.Main produces a non-compilable
+        // source file when JAIF-based WPI tries to output an annotated varargs parameter,
+        // such as when running the test
+        // checker/tests/ainfer-testchecker/non-annotated/AnonymousAndInnerClass.java.
+        // Until that bug is fixed, do not attempt to infer information about varargs
+        // parameters in JAIF mode.
         if (showWpiFailedInferences) {
           printFailedInferenceDebugMessage(
               "Annotations cannot be placed on varargs parameters in -Ainfer=jaifs mode, because"
-                  + " the JAIF format does not correctly support it.\n"
+                  + " the JAIF format does not correctly support it. "
                   + "The signature of the method whose varargs parameter was not annotated is: "
                   + JVMNames.getJVMMethodSignature(methodElt));
         }
@@ -363,7 +363,7 @@ public class WholeProgramInferenceImplementation<T> implements WholeProgramInfer
               printFailedInferenceDebugMessage(
                   "Javac cannot create an array type "
                       + "from a wildcard, so WPI did not attempt to infer a type for an array "
-                      + "parameter.\n"
+                      + "parameter. "
                       + "The signature of the method whose parameter had inference skipped is: "
                       + JVMNames.getJVMMethodSignature(methodElt));
             }
@@ -416,14 +416,14 @@ public class WholeProgramInferenceImplementation<T> implements WholeProgramInfer
 
     // This code handles fields of "this" and method parameters (including the receiver
     // parameter "this"), for now.  In the future, extend it to other expressions.
-    TypeElement containingClass = (TypeElement) methodElt.getEnclosingElement();
-    ThisReference thisReference = new ThisReference(containingClass.asType());
-    ClassName classNameReceiver = new ClassName(containingClass.asType());
+    TypeElement enclosingClass = (TypeElement) methodElt.getEnclosingElement();
+    ThisReference thisReference = new ThisReference(enclosingClass.asType());
+    ClassName classNameReceiver = new ClassName(enclosingClass.asType());
     // Fields of "this":
     for (VariableElement fieldElement :
-        ElementFilter.fieldsIn(containingClass.getEnclosedElements())) {
+        ElementFilter.fieldsIn(enclosingClass.getEnclosedElements())) {
       if (atypeFactory.wpiOutputFormat == OutputFormat.JAIF
-          && containingClass.getNestingKind().isNested()) {
+          && enclosingClass.getNestingKind().isNested()) {
         // Don't infer facts about fields of inner classes, because IndexFileWriter
         // places the annotations incorrectly on the class declarations.
         continue;
@@ -594,7 +594,7 @@ public class WholeProgramInferenceImplementation<T> implements WholeProgramInfer
         printFailedInferenceDebugMessage(
             "Could not update from formal parameter "
                 + "assignment, because an ArrayCreationNode with a null tree is created when "
-                + "the parameter is a variable-length list.\nParameter: "
+                + "the parameter is a variable-length list. Parameter: "
                 + paramElt);
       }
       return;
@@ -613,7 +613,7 @@ public class WholeProgramInferenceImplementation<T> implements WholeProgramInfer
         printFailedInferenceDebugMessage(
             "Could not update from formal "
                 + "parameter assignment inside a lambda expression, because lambda parameters "
-                + "cannot be annotated.\nParameter: "
+                + "cannot be annotated. Parameter: "
                 + paramElt);
       }
       return;
@@ -797,16 +797,17 @@ public class WholeProgramInferenceImplementation<T> implements WholeProgramInfer
     if (!(lubPurity && isPurityAnno(anno))) {
       annoToAdd = anno;
     } else {
-      // It's a purity annotation and `lubPurity` is true. Do a "least upper bound" between the
-      // current purity annotation inferred for the method and anno. This is necessary to avoid WPI
-      // inferring incompatible purity annotations on methods that override methods from their
-      // superclass. TODO: this would be unnecessary if purity was implemented as a type system.
+      // It's a purity annotation and `lubPurity` is true. Do a "least upper bound" between
+      // the current purity annotation inferred for the method and anno. This is necessary
+      // to avoid WPI inferring incompatible purity annotations on methods that override
+      // methods from their superclass.
+      // TODO: this would be unnecessary if purity was implemented as a type system.
       AnnotationMirror currentPurityAnno = getPurityAnnotation(methodElt);
       if (currentPurityAnno == null) {
         annoToAdd = anno;
       } else {
-        // Clear the current purity annotation, because at this point a new one is definitely
-        // going to be inferred.
+        // Clear the current purity annotation, because at this point a new one is
+        // definitely going to be inferred.
         storage.removeMethodDeclarationAnnotation(methodElt, currentPurityAnno);
         annoToAdd = lubPurityAnnotations(anno, currentPurityAnno);
       }
@@ -1100,20 +1101,21 @@ public class WholeProgramInferenceImplementation<T> implements WholeProgramInfer
         } else {
           if (showWpiFailedInferences) {
             printFailedInferenceDebugMessage(
-                "attempted to update the component type of an array type, but found an unexpected"
-                    + " difference in type structure.\n"
-                    + "LHS kind: "
-                    + sourceCodeComponent.getKind()
-                    + "\nRHS kind: "
-                    + ajavaComponent.getKind());
+                String.join(
+                    System.lineSeparator(),
+                    "attempted to update the component type of an array type, but found an"
+                        + " unexpected difference in type structure.",
+                    "LHS kind: " + sourceCodeComponent.getKind(),
+                    "RHS kind: " + ajavaComponent.getKind()));
             break;
           }
         }
         break;
         // case DECLARED:
         // Inferring annotations on type arguments is not supported, so no need to recur on
-        // generic types. If this was ever implemented, this method would need a VisitHistory
-        // object to prevent infinite recursion on types such as T extends List<T>.
+        // generic types. If this was ever implemented, this method would need a
+        // VisitHistory object to prevent infinite recursion on types such as T extends
+        // List<T>.
       default:
         // ATM only has primary annotations
         break;

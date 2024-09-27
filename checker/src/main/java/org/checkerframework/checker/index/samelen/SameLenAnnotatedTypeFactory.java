@@ -224,7 +224,8 @@ public class SameLenAnnotatedTypeFactory extends BaseAnnotatedTypeFactory {
           return createSameLen(exprs);
         }
       } else {
-        // If one of the annotations is top, the glb is the other annotation; otherwise bottom.
+        // If one of the annotations is top, the glb is the other annotation; otherwise
+        // bottom.
         if (areSameByClass(a1, SameLenUnknown.class)) {
           return a2;
         } else if (areSameByClass(a2, SameLenUnknown.class)) {
@@ -360,9 +361,9 @@ public class SameLenAnnotatedTypeFactory extends BaseAnnotatedTypeFactory {
     return AnnotationUtils.getElementValueArray(sameLenAnno, sameLenValueElement, String.class);
   }
 
-  ///
-  /// Creating @SameLen annotations
-  ///
+  //
+  // Creating @SameLen annotations
+  //
 
   /**
    * Creates a @SameLen annotation whose values are the given strings.
@@ -373,7 +374,7 @@ public class SameLenAnnotatedTypeFactory extends BaseAnnotatedTypeFactory {
    */
   public AnnotationMirror createSameLen(Collection<String> exprs) {
     AnnotationBuilder builder = new AnnotationBuilder(processingEnv, SameLen.class);
-    String[] exprArray = exprs.toArray(new String[exprs.size()]);
+    String[] exprArray = exprs.toArray(new String[0]);
     builder.setValue("value", exprArray);
     return builder.build();
   }

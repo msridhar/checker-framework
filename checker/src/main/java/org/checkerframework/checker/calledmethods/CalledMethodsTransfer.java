@@ -12,7 +12,7 @@ import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Types;
-import org.checkerframework.checker.calledmethods.qual.EnsuresCalledMethodsVarArgs;
+import org.checkerframework.checker.calledmethods.qual.EnsuresCalledMethodsVarargs;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.checkerframework.checker.resourceleak.ResourceLeakChecker;
 import org.checkerframework.common.accumulation.AccumulationStore;
@@ -123,7 +123,7 @@ public class CalledMethodsTransfer extends AccumulationTransfer {
         super.visitMethodInvocation(node, input);
 
     ExecutableElement method = TreeUtils.elementFromUse(node.getTree());
-    handleEnsuresCalledMethodsVarArgs(node, method, superResult);
+    handleEnsuresCalledMethodsVarargs(node, method, superResult);
     handleEnsuresCalledMethodsOnException(node, method, exceptionalStores);
 
     Node receiver = node.getTarget().getReceiver();
@@ -208,18 +208,19 @@ public class CalledMethodsTransfer extends AccumulationTransfer {
 
   /**
    * Update the types of varargs parameters passed to a method with an {@link
-   * EnsuresCalledMethodsVarArgs} annotation. This method is a no-op if no such annotation is
+   * EnsuresCalledMethodsVarargs} annotation. This method is a no-op if no such annotation is
    * present.
    *
    * @param node the method invocation node
    * @param elt the method being invoked
    * @param result the current result
    */
-  private void handleEnsuresCalledMethodsVarArgs(
+  @SuppressWarnings("deprecation") // EnsuresCalledMethodsVarArgs
+  private void handleEnsuresCalledMethodsVarargs(
       MethodInvocationNode node,
       ExecutableElement elt,
       TransferResult<AccumulationValue, AccumulationStore> result) {
-    AnnotationMirror annot = atypeFactory.getDeclAnnotation(elt, EnsuresCalledMethodsVarArgs.class);
+    AnnotationMirror annot = atypeFactory.getDeclAnnotation(elt, EnsuresCalledMethodsVarargs.class);
     if (annot == null) {
       return;
     }
@@ -227,7 +228,7 @@ public class CalledMethodsTransfer extends AccumulationTransfer {
         AnnotationUtils.getElementValueArray(
             annot,
             ((CalledMethodsAnnotatedTypeFactory) atypeFactory)
-                .ensuresCalledMethodsVarArgsValueElement,
+                .ensuresCalledMethodsVarargsValueElement,
             String.class);
     List<? extends VariableElement> parameters = elt.getParameters();
     int varArgsPos = parameters.size() - 1;
@@ -280,10 +281,10 @@ public class CalledMethodsTransfer extends AccumulationTransfer {
         continue;
       }
 
-      // NOTE: this code is a little inefficient; it creates a single-method annotation and calls
-      // `insertOrRefine` in a loop.  Even worse, this code appears within a loop.  For now we
-      // aren't too worried about it, since the number of EnsuresCalledMethodsOnException
-      // annotations should be small.
+      // NOTE: this code is a little inefficient; it creates a single-method annotation and
+      // calls `insertOrRefine` in a loop.  Even worse, this code appears within a loop.
+      // For now we aren't too worried about it, since the number of
+      // EnsuresCalledMethodsOnException annotations should be small.
       AnnotationMirror calledMethod =
           atypeFactory.createAccumulatorAnnotation(postcond.getMethod());
       for (Map.Entry<TypeMirror, AccumulationStore> successor : exceptionalStores.entrySet()) {

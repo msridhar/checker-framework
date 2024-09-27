@@ -229,7 +229,7 @@ public class OptionalVisitor
           tree,
           "prefer.map.and.orelse",
           receiver,
-          // The literal "CONTAININGCLASS::" is gross.
+          // The literal "ENCLOSINGCLASS::" is gross.
           // TODO: add this to the error message.
           // ElementUtils.getQualifiedClassName(ele);
           ele.getSimpleName(),
@@ -505,7 +505,7 @@ public class OptionalVisitor
    * {@code x = Optional.of(Optional.of("baz"));}. However, the type of the right-hand side is
    * {@code Optional<? extends Object>}, not {@code Optional<Optional<String>>}. Therefore, to fully
    * check for improper types, it is necessary to examine, in the type checker, the argument to
-   * construction of an Optional. Method {@link handleNestedOptionalCreation} does so.
+   * construction of an Optional. Method {@link #handleNestedOptionalCreation} does so.
    */
   private final class OptionalTypeValidator extends BaseTypeValidator {
 

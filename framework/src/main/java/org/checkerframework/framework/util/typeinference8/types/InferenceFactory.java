@@ -183,7 +183,7 @@ public class InferenceFactory {
           return new ProperType(res, TreeUtils.typeOf(var), this.context);
         } else {
           throw new BugInCF(
-              "Unexpected assignment context.\nKind: %s\nTree: %s", context.getKind(), context);
+              "Unexpected assignment context.%nKind: %s%nTree: %s", context.getKind(), context);
         }
     }
   }
@@ -268,7 +268,7 @@ public class InferenceFactory {
 
     ExecutableType methodType = getTypeOfMethodAdaptedToUse(invocation, context);
     if (treeIndex >= methodType.getParameterTypes().size() - 1
-        && TreeUtils.isVarArgMethodCall(invocation)) {
+        && TreeUtils.isVarargsCall(invocation)) {
       treeIndex = methodType.getParameterTypes().size() - 1;
       TypeMirror typeMirror = methodType.getParameterTypes().get(treeIndex);
       return ((ArrayType) typeMirror).getComponentType();
@@ -301,7 +301,7 @@ public class InferenceFactory {
     }
 
     if (treeIndex >= methodType.getParameterTypes().size() - 1
-        && TreeUtils.isVarArgMethodCall(invocation)) {
+        && TreeUtils.isVarargsCall(invocation)) {
       treeIndex = methodType.getParameterTypes().size() - 1;
       AnnotatedTypeMirror typeMirror = methodType.getParameterTypes().get(treeIndex);
       return ((AnnotatedArrayType) typeMirror).getComponentType();
@@ -593,8 +593,8 @@ public class InferenceFactory {
     TypeMirror preColonTreeType = TreeUtils.typeOf(memRef.getQualifierExpression());
     if (TreeUtils.isDiamondMemberReference(memRef)
         || TreeUtils.isLikeDiamondMemberReference(memRef)) {
-      // If memRef is a constructor or method of a generic class whose type argument isn't specified
-      // such as HashSet::new or HashSet::put
+      // If memRef is a constructor or method of a generic class whose type argument isn't
+      // specified such as HashSet::new or HashSet::put
       // then add variables for the type arguments to the class.
       TypeElement classEle = (TypeElement) ((Type) preColonTreeType).asElement();
       DeclaredType classTypeMirror = (DeclaredType) classEle.asType();
@@ -977,7 +977,12 @@ public class InferenceFactory {
       if (ei.isProper()) {
         properTypes.add((ProperType) ei);
       } else {
-        es.add((UseOfVariable) ei);
+        UseOfVariable varEi = (UseOfVariable) ei;
+        if (varEi.getVariable().getInstantiation() != null) {
+          properTypes.add(varEi.getVariable().getInstantiation());
+        } else {
+          es.add((UseOfVariable) ei);
+        }
       }
     }
     if (es.isEmpty()) {
@@ -998,6 +1003,21 @@ public class InferenceFactory {
           compileTimeDeclarationType((MemberReferenceTree) expression)
               .getAnnotatedType()
               .getThrownTypes();
+      if (thrownTypes.size() != thrownTypeMirrors.size()) {
+        // TODO: the thrown types are not stored in the ExecutableElements, so the above
+        // method doesn't find any thrown types.  Below gets the types thrown type from the
+        // ExecutableType and just adds default annotations.  This is just a work around for
+        // this problem.  We need to figure out how to get the type with the correct
+        // annotations.
+        List<AnnotatedTypeMirror> thrownTypesNew = new ArrayList<>(thrownTypeMirrors.size());
+        for (TypeMirror thrown : thrownTypeMirrors) {
+          AnnotatedTypeMirror thrownATM =
+              AnnotatedTypeMirror.createType(thrown, context.typeFactory, false);
+          context.typeFactory.addDefaultAnnotations(thrownATM);
+          thrownTypesNew.add(thrownATM);
+        }
+        thrownTypes = thrownTypesNew;
+      }
     }
 
     Iterator<? extends AnnotatedTypeMirror> iter2 = thrownTypes.iterator();

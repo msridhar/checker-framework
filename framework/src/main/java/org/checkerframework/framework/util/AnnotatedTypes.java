@@ -521,21 +521,6 @@ public class AnnotatedTypes {
       memberType = atypeFactory.getTypeVarSubstitutor().substitute(mappings, memberType);
     }
 
-    if (receiverType.getKind() == TypeKind.DECLARED && member.getKind() == ElementKind.METHOD) {
-      AnnotatedDeclaredType capturedReceiver =
-          ((AnnotatedExecutableType) memberType).getReceiverType();
-      TypeMirror s = types.asMemberOf(capturedReceiver.getUnderlyingType(), member);
-      AnnotatedExecutableType t =
-          (AnnotatedExecutableType)
-              AnnotatedTypeMirror.createType(s, atypeFactory, memberType.isDeclaration());
-      t.setReceiverType(capturedReceiver.deepCopy());
-      t.setElement((ExecutableElement) member);
-
-      atypeFactory.initializeAtm(t);
-      atypeFactory.replaceAnnotations(memberType, t);
-      return t;
-    }
-
     return memberType;
   }
 
@@ -673,7 +658,7 @@ public class AnnotatedTypes {
   }
 
   /**
-   * Given a method and all supertypes (recursively) of the method's containing class, returns the
+   * Given a method and all supertypes (recursively) of the method's enclosing class, returns the
    * methods that the method overrides.
    *
    * @param method the overriding method
@@ -707,9 +692,8 @@ public class AnnotatedTypes {
    * A pair of an empty map and false. Used in {@link #findTypeArguments(AnnotatedTypeFactory,
    * ExpressionTree, ExecutableElement, AnnotatedExecutableType, boolean)}.
    */
-  private static final IPair<Map<TypeVariable, AnnotatedTypeMirror>, Boolean> emptyFalsePair =
-      IPair.of(Collections.emptyMap(), false);
-  ;
+  private static final TypeArguments emptyFalsePair =
+      new TypeArguments(Collections.emptyMap(), false, false);
 
   /**
    * Given a method or constructor invocation, return a mapping of the type variables to their type
@@ -727,9 +711,10 @@ public class AnnotatedTypes {
    *     AnnotatedTypes.asMemberOf with the receiver and elt
    * @param inferTypeArgs whether the type argument should be inferred
    * @return the mapping of type variables to type arguments for this method or constructor
-   *     invocation, and whether unchecked conversion was required to infer the type arguments
+   *     invocation, and whether unchecked conversion was required to infer the type arguments, and
+   *     whether type argument inference crashed
    */
-  public static IPair<Map<TypeVariable, AnnotatedTypeMirror>, Boolean> findTypeArguments(
+  public static TypeArguments findTypeArguments(
       AnnotatedTypeFactory atypeFactory,
       ExpressionTree expr,
       ExecutableElement elt,
@@ -752,9 +737,10 @@ public class AnnotatedTypes {
       if (inferTypeArgs && TreeUtils.needsTypeArgInference(memRef)) {
         InferenceResult inferenceResult =
             atypeFactory.getTypeArgumentInference().inferTypeArgs(atypeFactory, expr, preType);
-        return IPair.of(
+        return new TypeArguments(
             inferenceResult.getTypeArgumentsForExpression(expr),
-            inferenceResult.isUncheckedConversion());
+            inferenceResult.isUncheckedConversion(),
+            inferenceResult.inferenceCrashed());
       }
       targs = memRef.getTypeArguments();
       if (memRef.getTypeArguments() == null) {
@@ -789,17 +775,49 @@ public class AnnotatedTypes {
         // already should be a declaration.
         typeArguments.put(typeVar.getUnderlyingType(), typeArg);
       }
-      return IPair.of(typeArguments, false);
+      return new TypeArguments(typeArguments, false, false);
     } else {
       if (inferTypeArgs) {
         InferenceResult inferenceResult =
             atypeFactory.getTypeArgumentInference().inferTypeArgs(atypeFactory, expr, preType);
-        return IPair.of(
+        return new TypeArguments(
             inferenceResult.getTypeArgumentsForExpression(expr),
-            inferenceResult.isUncheckedConversion());
+            inferenceResult.isUncheckedConversion(),
+            inferenceResult.inferenceCrashed());
       } else {
         return emptyFalsePair;
       }
+    }
+  }
+
+  /**
+   * Class representing type arguments for a method, constructor, or method reference expression.
+   */
+  public static class TypeArguments {
+
+    /** A mapping from {@link TypeVariable} to its annotated type argument. */
+    public final Map<TypeVariable, AnnotatedTypeMirror> typeArguments;
+
+    /** Whether unchecked conversion was needed for inference. */
+    public final boolean uncheckedConversion;
+
+    /** Whether type argument inference crashed. */
+    public final boolean inferenceCrash;
+
+    /**
+     * Creates a {@link TypeArguments} object.
+     *
+     * @param typeArguments a mapping from {@link TypeVariable} to its annotated type argument
+     * @param uncheckedConversion whether unchecked conversion was needed for inference
+     * @param inferenceCrash whether type argument inference crashed
+     */
+    public TypeArguments(
+        Map<TypeVariable, AnnotatedTypeMirror> typeArguments,
+        boolean uncheckedConversion,
+        boolean inferenceCrash) {
+      this.typeArguments = typeArguments;
+      this.uncheckedConversion = uncheckedConversion;
+      this.inferenceCrash = inferenceCrash;
     }
   }
 
@@ -1001,15 +1019,15 @@ public class AnnotatedTypes {
    * @param method the method's type
    * @param args the arguments to the method invocation
    * @return the types that the method invocation arguments need to be subtype of
-   * @deprecated Use {@link #adaptParameters(AnnotatedTypeFactory,
-   *     AnnotatedTypeMirror.AnnotatedExecutableType, List)} instead
+   * @deprecated Use {@link #adaptParameters(AnnotatedTypeFactory, AnnotatedExecutableType, List,
+   *     Tree)} instead
    */
-  @Deprecated
+  @Deprecated // 2022-04-21
   public static List<AnnotatedTypeMirror> expandVarArgsParameters(
       AnnotatedTypeFactory atypeFactory,
       AnnotatedExecutableType method,
       List<? extends ExpressionTree> args) {
-    return adaptParameters(atypeFactory, method, args);
+    return adaptParameters(atypeFactory, method, args, null);
   }
 
   /**
@@ -1023,29 +1041,32 @@ public class AnnotatedTypes {
    * @param atypeFactory the type factory to use for fetching annotated types
    * @param method the method or constructor's type
    * @param args the arguments to the method or constructor invocation
+   * @param invok the method or constructor invocation
    * @return a list of the types that the invocation arguments need to be subtype of; has the same
    *     length as {@code args}
    */
   public static List<AnnotatedTypeMirror> adaptParameters(
       AnnotatedTypeFactory atypeFactory,
       AnnotatedExecutableType method,
-      List<? extends ExpressionTree> args) {
+      List<? extends ExpressionTree> args,
+      Tree invok) {
 
     List<AnnotatedTypeMirror> parameters = method.getParameterTypes();
-    // Handle anonymous constructors that extend a class with an enclosing type.
+
+    // Handle anonymous constructors that extend a class with an enclosing type,
+    // as in `new MyClass(){ ... }`.
     if (method.getElement().getKind() == ElementKind.CONSTRUCTOR
         && method.getElement().getEnclosingElement().getSimpleName().contentEquals("")) {
       DeclaredType t =
           TypesUtils.getSuperClassOrInterface(
               method.getElement().getEnclosingElement().asType(), atypeFactory.types);
       if (t.getEnclosingType() != null) {
-        if (args.isEmpty() && !parameters.isEmpty()) {
-          parameters = parameters.subList(1, parameters.size());
-        } else if (!parameters.isEmpty()) {
+        if (!parameters.isEmpty()) {
           if (atypeFactory.types.isSameType(
               t.getEnclosingType(), parameters.get(0).getUnderlyingType())) {
-            if (!atypeFactory.types.isSameType(
-                TreeUtils.typeOf(args.get(0)), parameters.get(0).getUnderlyingType())) {
+            if (args.isEmpty()
+                || !atypeFactory.types.isSameType(
+                    TreeUtils.typeOf(args.get(0)), parameters.get(0).getUnderlyingType())) {
               parameters = parameters.subList(1, parameters.size());
             }
           }
@@ -1054,14 +1075,20 @@ public class AnnotatedTypes {
     }
 
     // Handle vararg methods.
-    if (!method.getElement().isVarArgs()) {
+    if (!TreeUtils.isVarargsCall(invok)) {
       return parameters;
     }
-    if (parameters.size() == 0) {
-      return parameters;
+    if (parameters.isEmpty()) {
+      throw new BugInCF("isVarargsCall but parameters is empty: %s", invok);
     }
 
-    AnnotatedArrayType varargs = (AnnotatedArrayType) parameters.get(parameters.size() - 1);
+    AnnotatedTypeMirror lastParam = parameters.get(parameters.size() - 1);
+    if (!(lastParam instanceof AnnotatedArrayType)) {
+      throw new BugInCF(
+          String.format(
+              "for varargs call %s, last parameter %s is not an array", invok, lastParam));
+    }
+    AnnotatedArrayType varargs = (AnnotatedArrayType) lastParam;
 
     if (parameters.size() == args.size()) {
       // Check if one sent an element or an array
@@ -1089,7 +1116,7 @@ public class AnnotatedTypes {
    * @param args the types of the arguments at the call site
    * @return the method parameters, with varargs replaced by instances of its component type
    */
-  public static List<AnnotatedTypeMirror> expandVarArgsParametersFromTypes(
+  public static List<AnnotatedTypeMirror> expandVarargsParametersFromTypes(
       AnnotatedExecutableType method, List<AnnotatedTypeMirror> args) {
     List<AnnotatedTypeMirror> parameters = method.getParameterTypes();
     if (!method.getElement().isVarArgs()) {
@@ -1131,45 +1158,18 @@ public class AnnotatedTypes {
   public static AnnotatedTypeMirror getAnnotatedTypeMirrorOfParameter(
       AnnotatedExecutableType methodType, int index) {
     List<AnnotatedTypeMirror> parameterTypes = methodType.getParameterTypes();
-    boolean hasVarArg = methodType.getElement().isVarArgs();
+    boolean hasVarargs = methodType.getElement().isVarArgs();
 
     int lastIndex = parameterTypes.size() - 1;
     AnnotatedTypeMirror lastType = parameterTypes.get(lastIndex);
     boolean parameterBeforeVarargs = index < lastIndex;
     if (!parameterBeforeVarargs && lastType instanceof AnnotatedArrayType) {
       AnnotatedArrayType arrayType = (AnnotatedArrayType) lastType;
-      if (hasVarArg) {
+      if (hasVarargs) {
         return arrayType.getComponentType();
       }
     }
     return parameterTypes.get(index);
-  }
-
-  /**
-   * Return a list of the AnnotatedTypeMirror of the passed expression trees, in the same order as
-   * the trees.
-   *
-   * @param atypeFactory a type factory
-   * @param paramTypes the parameter types to use as assignment context
-   * @param trees the AST nodes
-   * @return a list with the AnnotatedTypeMirror of each tree in trees
-   * @deprecated use CollectionsPlume.mapList(atypeFactory::getAnnotatedType, trees) instead.
-   */
-  @Deprecated
-  public static List<AnnotatedTypeMirror> getAnnotatedTypes(
-      AnnotatedTypeFactory atypeFactory,
-      List<AnnotatedTypeMirror> paramTypes,
-      List<? extends ExpressionTree> trees) {
-    if (paramTypes.size() != trees.size()) {
-      throw new BugInCF(
-          "AnnotatedTypes.getAnnotatedTypes: size mismatch! "
-              + "Parameter types: "
-              + paramTypes
-              + " Arguments: "
-              + trees);
-    }
-
-    return CollectionsPlume.mapList(atypeFactory::getAnnotatedType, trees);
   }
 
   /**
@@ -1597,7 +1597,7 @@ public class AnnotatedTypes {
    * @return true if wildcard type is explicitly super bounded
    * @deprecated Use {@link #hasExplicitSuperBound(AnnotatedTypeMirror)}
    */
-  @Deprecated
+  @Deprecated // 2023-02-28
   public static boolean isExplicitlySuperBounded(AnnotatedWildcardType wildcardType) {
     return hasExplicitSuperBound(wildcardType);
   }
@@ -1619,7 +1619,7 @@ public class AnnotatedTypes {
    * @return true if wildcard type is explicitly extends bounded
    * @deprecated Use {@link #hasExplicitExtendsBound(AnnotatedTypeMirror)}.
    */
-  @Deprecated
+  @Deprecated // 2023-02-28
   public static boolean isExplicitlyExtendsBounded(AnnotatedWildcardType wildcardType) {
     return hasExplicitExtendsBound(wildcardType);
   }

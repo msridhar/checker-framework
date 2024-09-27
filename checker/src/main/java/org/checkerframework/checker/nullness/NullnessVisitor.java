@@ -282,6 +282,7 @@ public class NullnessVisitor
   @Override
   public Void visitArrayAccess(ArrayAccessTree tree, Void p) {
     checkForNullability(tree.getExpression(), ACCESSING_NULLABLE);
+    checkForNullability(tree.getIndex(), UNBOXING_OF_NULLABLE);
     return super.visitArrayAccess(tree, p);
   }
 
@@ -298,6 +299,9 @@ public class NullnessVisitor
             || checker.getLintOption("forbidnonnullarraycomponents", false))) {
       checker.reportError(
           tree, "new.array", componentType.getPrimaryAnnotations(), type.toString());
+    }
+    for (ExpressionTree dimension : tree.getDimensions()) {
+      checkForNullability(dimension, UNBOXING_OF_NULLABLE);
     }
 
     return super.visitNewArray(tree, p);
@@ -517,7 +521,7 @@ public class NullnessVisitor
   }
 
   @Override
-  public Void visitMethod(MethodTree tree, Void p) {
+  public void processMethodTree(MethodTree tree) {
     if (TreeUtils.isConstructor(tree)) {
       List<? extends AnnotationTree> annoTrees = tree.getModifiers().getAnnotations();
       if (atypeFactory.containsNullnessAnnotation(annoTrees)) {
@@ -534,7 +538,7 @@ public class NullnessVisitor
       }
     }
 
-    return super.visitMethod(tree, p);
+    super.processMethodTree(tree);
   }
 
   @Override

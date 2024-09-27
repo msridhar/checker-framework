@@ -63,6 +63,7 @@ import org.checkerframework.dataflow.expression.FormalParameter;
 import org.checkerframework.dataflow.expression.JavaExpression;
 import org.checkerframework.dataflow.expression.LocalVariable;
 import org.checkerframework.dataflow.expression.MethodCall;
+import org.checkerframework.dataflow.expression.SuperReference;
 import org.checkerframework.dataflow.expression.ThisReference;
 import org.checkerframework.dataflow.expression.UnaryOperation;
 import org.checkerframework.dataflow.expression.ValueLiteral;
@@ -366,13 +367,17 @@ public class JavaExpressionParseUtil {
 
     @Override
     public JavaExpression visit(SuperExpr n, Void aVoid) {
+      if (thisReference == null) {
+        throw new ParseRuntimeException(
+            constructJavaExpressionParseError("super", "\"super\" isn't allowed here"));
+      }
       // super literal
       TypeMirror superclass = TypesUtils.getSuperclass(enclosingType, types);
       if (superclass == null) {
         throw new ParseRuntimeException(
             constructJavaExpressionParseError("super", enclosingType + " has no superclass"));
       }
-      return new ThisReference(superclass);
+      return new SuperReference(superclass);
     }
 
     // expr is an expression in parentheses.
@@ -630,6 +635,14 @@ public class JavaExpressionParseUtil {
           // field not found.
           return null;
         }
+        if (receiverExpr instanceof SuperReference
+            && thisReference.getType().getKind() == TypeKind.DECLARED) {
+          Element thisFieldElem =
+              resolver.findField(identifier, thisReference.getType(), pathToCompilationUnit);
+          if (thisFieldElem == null) {
+            receiverExpr = thisReference;
+          }
+        }
       }
 
       // `fieldElem` is now set.  Construct a FieldAccess expression.
@@ -791,11 +804,11 @@ public class JavaExpressionParseUtil {
       throw constructJavaExpressionParseError(methodName, "no such method");
     }
 
-    // `expr` should be a field access, a fully qualified class name, or a class name qualified with
-    // another class name (e.g. {@code OuterClass.InnerClass}).
-    // If the expression refers to a class that is not available to the resolver (the class wasn't
-    // passed to javac on the command line), then the argument can be "outerpackage.innerpackage",
-    // which will lead to a confusing error message.
+    // `expr` should be a field access, a fully qualified class name, or a class name qualified
+    // with another class name (e.g. {@code OuterClass.InnerClass}).  If the expression refers
+    // to a class that is not available to the resolver (the class wasn't passed to javac on
+    // the command line), then the argument can be "outerpackage.innerpackage", which will lead
+    // to a confusing error message.
     @Override
     public JavaExpression visit(FieldAccessExpr expr, Void aVoid) {
       setResolverField();
@@ -1073,9 +1086,9 @@ public class JavaExpressionParseUtil {
     return -1;
   }
 
-  ///////////////////////////////////////////////////////////////////////////
-  /// Contexts
-  ///
+  // ///////////////////////////////////////////////////////////////////////////
+  // Contexts
+  //
 
   /**
    * Returns the type of the innermost enclosing class. Returns Type.noType if the type is a
@@ -1107,9 +1120,9 @@ public class JavaExpressionParseUtil {
     }
   }
 
-  ///////////////////////////////////////////////////////////////////////////
-  /// Exceptions
-  ///
+  // ///////////////////////////////////////////////////////////////////////////
+  // Exceptions
+  //
 
   /**
    * An exception that indicates a parse error. Call {@link #getDiagMessage} to obtain a {@link

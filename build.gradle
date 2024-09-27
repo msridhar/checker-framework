@@ -4,12 +4,14 @@ plugins {
   // https://plugins.gradle.org/plugin/com.github.johnrengelman.shadow
   id 'com.github.johnrengelman.shadow' version '8.1.1'
   // https://plugins.gradle.org/plugin/de.undercouch.download
-  id 'de.undercouch.download' version '5.5.0'
+  id 'de.undercouch.download' version '5.6.0'
   id 'java'
   // https://github.com/tbroyer/gradle-errorprone-plugin
   id 'net.ltgt.errorprone' version '3.1.0'
   // https://plugins.gradle.org/plugin/org.ajoberstar.grgit
-  id 'org.ajoberstar.grgit' version '5.2.1' apply false
+  id 'org.ajoberstar.grgit' version '5.2.2' apply false
+  // https://docs.gradle.org/current/userguide/eclipse_plugin.html
+  id 'eclipse'
 
   id 'groovy' // needed for formatting Gradle files
   // Code formatting; defines targets "spotlessApply" and "spotlessCheck".
@@ -17,9 +19,6 @@ plugins {
   // Only works on JDK 11+ (even including the plugin crashes Gradle on JDK 8).
   id 'com.diffplug.spotless' version '6.25.0'
 }
-apply plugin: 'de.undercouch.download'
-
-import org.ajoberstar.grgit.Grgit
 
 // There is another `repositories { ... }` block below; if you change this one, change that one as well.
 repositories {
@@ -33,7 +32,7 @@ ext {
   isJava17orHigher = JavaVersion.current() >= JavaVersion.VERSION_17
   isJava21orHigher = JavaVersion.current() >= JavaVersion.VERSION_21
 
-  // As of 2023-09-23, delombok doesn't yet support JDK 22; see https://projectlombok.org/changelog .
+  // As of 2024-08-19 (Lombok 1.18.34), delombok doesn't yet support JDK 23; see https://projectlombok.org/changelog .
   skipDelombok = JavaVersion.current() > JavaVersion.VERSION_21
 
   parentDir = file("${rootDir}/../").absolutePath
@@ -53,13 +52,13 @@ ext {
   localRepo = '.git'
 
   versions = [
-    autoValue       : '1.10.4',
+    autoValue       : '1.11.0',
     googleJavaFormat : '1.19.2',
-    lombok          : '1.18.30',
+    lombok          : '1.18.34',
     hashmapUtil : '0.0.1',
     reflectionUtil : '1.1.3',
-    plumeUtil : '1.9.0',
-    errorprone : '2.24.1',
+    plumeUtil : '1.9.3',
+    errorprone : '2.32.0',
   ]
 }
 
@@ -113,14 +112,15 @@ allprojects { currentProj ->
   // level (third number) if:
   //   * any new checkers have been added, or
   //   * backward-incompatible changes have been made to APIs or elsewhere.
-  // To make a snapshot release: ./gradlew publish
-  version '3.43.0-SNAPSHOT'
+  // To make a snapshot release, version should end in "-SNAPSHOT", then: ./gradlew publish
+  version '3.47.1-SNAPSHOT'
 
   tasks.withType(JavaCompile).configureEach {
     options.fork = true
   }
 
   apply plugin: 'java'
+  apply plugin: 'eclipse'
   apply plugin: 'com.github.johnrengelman.shadow'
   apply plugin: 'de.undercouch.download'
   apply plugin: 'net.ltgt.errorprone'
@@ -149,6 +149,20 @@ allprojects { currentProj ->
     errorproneJavac("com.google.errorprone:javac:9+181-r4173-1")
 
     allProjects subprojects
+  }
+
+  eclipse.classpath {
+    defaultOutputDir = file("build/default")
+    file.whenMerged { cp ->
+      cp.entries.forEach { cpe ->
+        if (cpe instanceof org.gradle.plugins.ide.eclipse.model.SourceFolder) {
+          cpe.output = cpe.output.replace "bin/", "build/classes/java/"
+        }
+        if (cpe instanceof org.gradle.plugins.ide.eclipse.model.Output) {
+          cpe.path = cpe.path.replace "bin/", "build/"
+        }
+      }
+    }
   }
 
   ext {
@@ -254,7 +268,12 @@ allprojects { currentProj ->
       }
       targetExclude doNotFormat
 
-      googleJavaFormat(versions.googleJavaFormat) // the formatter to apply to Java files
+      if (project.hasProperty('eisopFormatting')) {
+        googleJavaFormat(versions.googleJavaFormat).aosp()
+        importOrder('com', 'jdk', 'lib', 'lombok', 'org', 'java', 'javax')
+      } else {
+        googleJavaFormat(versions.googleJavaFormat) // the formatter to apply to Java files
+      }
       formatAnnotations()
     }
 
@@ -264,7 +283,11 @@ allprojects { currentProj ->
         target '**/*.gradle'
         targetExclude doNotFormat
         greclipse()  // which formatter Spotless should use to format .gradle files.
-        indentWithSpaces(2)
+        if (project.hasProperty('eisopFormatting')) {
+          indentWithSpaces(4)
+        } else {
+          indentWithSpaces(2)
+        }
         trimTrailingWhitespace()
         // endWithNewline() // Don't want to end empty files with a newline
       }
@@ -410,7 +433,7 @@ allprojects { currentProj ->
       // -options: To not get a warning about missing bootstrap classpath (when using Java 9 and `-source 8`).
       // -fallthrough: Don't check fallthroughs.  Instead, use Error Prone.  Its
       //   warnings are suppressible with a "// fall through" comment.
-      String lint =     '-Xlint:-options,-fallthrough'
+      String lint = '-Xlint:-options,-fallthrough'
       if (isJava21orHigher && !jdk17Compiler) {
         // TODO: Ignore this-escape for now, we may want to review and suppress each one later.
         lint +=',-this-escape'
@@ -425,19 +448,18 @@ allprojects { currentProj ->
       options.encoding = 'UTF-8'
       options.fork = true
 
-      // Error Prone depends on checker-qual.jar, so don't run it on that project to avoid a circular dependency.
       // TODO: enable Error Prone on test classes.
-      if (compilationTask.name.equals('compileJava') && !project.name.startsWith('checker-qual')) {
+      if (compilationTask.name.equals('compileJava')
+          // Error Prone depends on checker-qual.jar, so don't run it on that project to avoid a circular dependency.
+          && !project.name.startsWith('checker-qual')) {
         // Error Prone must be available in the annotation processor path
         options.annotationProcessorPath = configurations.errorprone
         // Enable Error Prone
-        options.errorprone.enabled = true
+        options.errorprone.enabled = isJava17orHigher
         options.errorprone.disableWarningsInGeneratedCode = true
         options.errorprone.errorproneArgs = [
           // Many compiler classes are interned.
           '-Xep:ReferenceEquality:OFF',
-          // These might be worth fixing.
-          '-Xep:DefaultCharset:OFF',
           // Not useful to suggest Splitter; maybe clean up.
           '-Xep:StringSplitter:OFF',
           // Too broad, rejects seemingly-correct code.
@@ -457,6 +479,8 @@ allprojects { currentProj ->
           '-Xep:ExtendsObject:OFF',
           // The Checker Framework is the only nullness tool we care about.
           '-Xep:NullableWildcard:OFF',
+          // In the visitor pattern, it is natural to forward a Void reference.
+          '-Xep:VoidUsed:OFF',
           // -Werror halts the build if Error Prone issues a warning, which ensures that
           // the errors get fixed.  On the downside, Error Prone (or maybe the compiler?)
           // stops as soon as it issues one warning, rather than outputting them all.
@@ -559,6 +583,9 @@ task allJavadoc(type: Javadoc, group: 'Documentation') {
   }
 
   classpath = configurations.allProjects
+  // disable interpreting module-info.java files until all sub-modules support them
+  modularity.inferModulePath = false
+
   doLast {
     copy {
       from 'docs/logo/Checkmark/CFCheckmark_favicon.png'
@@ -579,11 +606,20 @@ task allJavadoc(type: Javadoc, group: 'Documentation') {
 // See documentation for allJavadoc task.
 javadoc.dependsOn(allJavadoc)
 
+clean {
+  delete(file("${rootDir}/docs/api"))
+  doLast {
+    exec {
+      commandLine 'make', '-C', 'docs/manual', 'clean'
+    }
+  }
+}
+
 configurations {
   requireJavadoc
 }
 dependencies {
-  requireJavadoc 'org.plumelib:require-javadoc:1.0.6'
+  requireJavadoc 'org.plumelib:require-javadoc:1.0.9'
 }
 task requireJavadoc(type: JavaExec, group: 'Documentation') {
   description = 'Ensures that Javadoc documentation exists in source code.'
@@ -613,6 +649,8 @@ def createJavadocTask(taskName, taskDescription, memberLevel) {
     }
 
     classpath = configurations.allProjects
+    // disable interpreting module-info.java files until all sub-modules support them
+    modularity.inferModulePath = false
 
     destinationDir.deleteDir()
     options.memberLevel = memberLevel
@@ -648,7 +686,7 @@ void clone(url, directory, ignoreError, extraArgs = []){
     args = [
       'clone',
       '-q',
-      '--filter=blob:none',
+      '--depth=1',
       url,
       file(directory).toPath().last()
     ]
@@ -741,7 +779,7 @@ subprojects {
 
     // TODO: it's a bug that annotatedlib:guava requires the error_prone_annotations dependency.
     annotatedGuava "com.google.errorprone:error_prone_annotations:${versions.errorprone}"
-    annotatedGuava ('org.checkerframework.annotatedlib:guava:30.1.1-jre') {
+    annotatedGuava ('org.checkerframework.annotatedlib:guava:33.1.0.2-jre') {
       // So long as Guava only uses annotations from checker-qual, excluding it should not cause problems.
       exclude group: 'org.checkerframework'
     }
@@ -800,7 +838,7 @@ subprojects {
       manifest {
         attributes('Implementation-Version': "${project.version}")
         attributes('Implementation-URL': 'https://checkerframework.org')
-        if (! archiveFileName.get().endsWith('source.jar')) {
+        if (! archiveFileName.get().endsWith('source.jar') && ! archiveFileName.get().startsWith('checker-qual')) {
           attributes('Automatic-Module-Name': 'org.checkerframework.' + project.name.replaceAll('-', '.'))
         }
         if (archiveFileName.get().startsWith('checker-qual') || archiveFileName.get().startsWith('checker-util')) {
@@ -913,9 +951,10 @@ subprojects {
             }
           } catch (Exception ex) {
             if (ex.getCause() != null && ex.getCause().getCause()!= null) {
-              String msg = ex.getCause().getLocalizedMessage() + ':\n'
-              msg += ex.getCause().getCause().getLocalizedMessage() + '\n'
-              msg += 'Have you installed jtreg?'
+              String msg = String.join(System.lineSeparator(),
+                  ex.getCause().getLocalizedMessage() + ':',
+                  ex.getCause().getCause().getLocalizedMessage(),
+                  'Have you installed jtreg?')
               println msg
             }
             throw ex
@@ -939,10 +978,26 @@ subprojects {
     tasks.withType(Test) {
       jvmArgs += compilerArgsForRunningCF
 
+      // maxParallelForks controls the parallelism of a single Test
+      // task. --parallel controls parallelism for the entire build.
+
       // Run tests in parallel, except on CI where it seems to lead to flaky failures.
       // The TF_BUILD environment variable is set to 'True' for jobs running on Azure Pipelines.
       if (!System.getenv('TF_BUILD')?.equals('True')) {
-        maxParallelForks = Integer.MAX_VALUE
+        // Not running under Azure Pipelines CI.
+
+        maxParallelForks = Runtime.runtime.availableProcessors() ?: 1
+      } else {
+        // Running under Azure Pipelines CI.
+
+        // Per Manu's comment above, on CI, parallelism seems to lead to flaky failures.
+        maxParallelForks = 1
+
+        // Fork the test to try to improve performance.
+        // https://docs.gradle.org/current/userguide/performance.html#fork_tests_into_multiple_processes
+        tasks.withType(Test).configureEach {
+          forkEvery = 25
+        }
       }
 
       if (project.name.is('checker')) {

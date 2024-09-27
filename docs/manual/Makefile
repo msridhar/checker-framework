@@ -17,6 +17,7 @@ index-checker.tex \
 called-methods-checker.tex \
 fenum-checker.tex \
 tainting-checker.tex \
+sql-quotes-checker.tex \
 regex-checker.tex \
 formatter-checker.tex \
 i18n-format-checker.tex \
@@ -81,9 +82,9 @@ manual.html: manual.pdf CFLogo.png favicon-checkerframework.png ../api
 
 .PHONY: contributors.tex
 contributors.tex:
-# Update plume-scripts even if it is already cloned
-	cd ../.. && (./gradlew --stacktrace getPlumeScripts || (sleep 60 && ./gradlew --stacktrace getPlumeScripts))
-	../../checker/bin-devel/.plume-scripts/git-authors --latex --punctuation > contributors.tex
+# Update git-scripts even if it is already cloned
+	cd ../.. && (./gradlew --stacktrace getGitScripts || (sleep 60 && ./gradlew --stacktrace getGitScripts))
+	../../checker/bin-devel/.git-scripts/git-authors --latex --punctuation > contributors.tex
 
 ../api:
 	cd ../.. && ./gradlew allJavadoc
@@ -101,7 +102,7 @@ check-labels:
 
 export BIBINPUTS = $BIBINPUTS:.:plume-bib
 plume-bib:
-	(git clone --filter=blob:none -q https://github.com/mernst/plume-bib.git || git clone --filter=blob:none -q https://github.com/mernst/plume-bib.git)
+	(git clone --depth=1 -q https://github.com/mernst/plume-bib.git || git clone --depth=1 -q https://github.com/mernst/plume-bib.git)
 .PHONY: plume-bib-update
 plume-bib-update: plume-bib
 # Even if this command fails, it does not terminate the make job.

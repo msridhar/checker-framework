@@ -164,7 +164,7 @@ public class InitializationTransfer<
   }
 
   /**
-   * If an invariant field is initialized and has the invariant annotation, than it has at least the
+   * If an invariant field is initialized and has the invariant annotation, then it has at least the
    * invariant annotation. Note that only fields of the 'this' receiver are tracked for
    * initialization.
    */
@@ -183,7 +183,7 @@ public class InitializationTransfer<
         V refinedResultValue =
             analysis.createSingleAnnotationValue(inv, oldResultValue.getUnderlyingType());
         V newResultValue = refinedResultValue.mostSpecific(oldResultValue, null);
-        result.setResultValue(newResultValue);
+        return recreateTransferResult(newResultValue, result);
       }
     }
     return result;

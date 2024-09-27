@@ -236,7 +236,8 @@ public class Typing extends TypeConstraint {
 
       return set;
     } else {
-      // The constraint reduces to true if T is among the supertypes of S, and false otherwise.
+      // The constraint reduces to true if T is among the supertypes of S, and false
+      // otherwise.
       return ((InferenceType) S).isSubType((ProperType) T);
     }
   }
@@ -299,14 +300,16 @@ public class Typing extends TypeConstraint {
    */
   private ReductionResult reduceContained() {
     if (T.getTypeKind() != TypeKind.WILDCARD) {
-      if (S.getTypeKind() != TypeKind.WILDCARD) {
-        if (isCovarTypeArg) {
-          return new Typing(S, T, Kind.SUBTYPE);
-        }
-        return new Typing(S, T, Kind.TYPE_EQUALITY);
-      } else {
-        return ConstraintSet.FALSE;
+      // The JLS says that if S is a wildcard the constraint should reduce to false,
+      // but javac seems to accept this case. Issue6725.java is an example.
+      // if (S.getTypeKind() == TypeKind.WILDCARD) {
+      //   return ConstraintSet.FALSE;
+      // }
+      if (isCovarTypeArg) {
+        return new Typing(S, T, Kind.SUBTYPE);
       }
+      return new Typing(S, T, Kind.TYPE_EQUALITY);
+
     } else if (T.isUnboundWildcard()) {
       return ConstraintSet.TRUE;
     } else if (T.isUpperBoundedWildcard()) {

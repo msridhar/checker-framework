@@ -313,8 +313,17 @@ public class RegexAnnotatedTypeFactory extends BaseAnnotatedTypeFactory {
         new RegexPropagationTreeAnnotator(this));
   }
 
+  /**
+   * Disables PropagationTreeAnnotator for binary trees. This prevents undesirable heavy recursion
+   * in large binary trees.
+   */
   private static class RegexPropagationTreeAnnotator extends PropagationTreeAnnotator {
 
+    /**
+     * Creates a RegexPropagationTreeAnnotator.
+     *
+     * @param atypeFactory the type factory
+     */
     public RegexPropagationTreeAnnotator(AnnotatedTypeFactory atypeFactory) {
       super(atypeFactory);
     }
@@ -322,7 +331,7 @@ public class RegexAnnotatedTypeFactory extends BaseAnnotatedTypeFactory {
     @Override
     public Void visitBinary(BinaryTree tree, AnnotatedTypeMirror type) {
       // Don't call super method which will try to create a LUB
-      // Even when it is not yet valid: i.e. between a @PolyRegex and a @Regex
+      // even when it is not yet valid, e.g., between a @PolyRegex and a @Regex.
       return null;
     }
   }
@@ -378,7 +387,8 @@ public class RegexAnnotatedTypeFactory extends BaseAnnotatedTypeFactory {
         boolean rExprPoly = rExpr.hasPrimaryAnnotation(PolyRegex.class);
 
         if (lExprRE && rExprRE) {
-          // Remove current @Regex annotation and add a new one with the correct group count value.
+          // Remove current @Regex annotation and add a new one with the correct group
+          // count value.
           type.replaceAnnotation(createRegexAnnotation(lGroupCount + rGroupCount));
         } else if ((lExprPoly && rExprPoly) || (lExprPoly && rExprRE) || (lExprRE && rExprPoly)) {
           type.addAnnotation(POLYREGEX);
